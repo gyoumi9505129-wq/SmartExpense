@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="register_transaction"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_register"
+        android:shortcutShortLabel="@string/shortcut_register_transaction_short"
+        android:shortcutLongLabel="@string/shortcut_register_transaction_long">
+        <intent
+            android:action="com.smartexpense.action.OPEN_TRANSACTION_FORM"
+            android:targetClass="com.smartexpense.MainActivity"
+            android:targetPackage="com.smartexpense" />
+    </shortcut>
+</shortcuts>

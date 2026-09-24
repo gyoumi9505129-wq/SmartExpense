@@ -1,0 +1,292 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /** 앱 SystemAdminConfig.emails 와 동일하게 유지 */
+    function isSystemAdmin() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() in [
+          'gyoumi9505129@gmail.com'
+        ];
+    }
+
+    function meetingData(meetingId) {
+      return get(/databases/$(database)/documents/meetings/$(meetingId)).data;
+    }
+
+    function isInSharedWith(data) {
+      return isSignedIn()
+        && 'sharedWith' in data
+        && request.auth.uid in data.sharedWith;
+    }
+
+    function meetingSelfServiceKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['sharedWith', 'inactiveMemberUids', 'inactiveMemberReasons']);
+    }
+
+    function isNotAddingSelfToSharedWith() {
+      return !('sharedWith' in request.resource.data)
+        || !(request.auth.uid in request.resource.data.sharedWith);
+    }
+
+    function isLeavingMeetingSelf() {
+      return isSignedIn()
+        && 'sharedWith' in resource.data
+        && request.auth.uid in resource.data.sharedWith
+        && 'sharedWith' in request.resource.data
+        && !(request.auth.uid in request.resource.data.sharedWith)
+        && meetingSelfServiceKeys();
+    }
+
+    /** 관리자가 이메일로 예약한 초대를, 해당 이메일 계정이 로그인 후 수락 */
+    function isClaimingEmailInvite() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && 'invitedEmails' in resource.data
+        && request.auth.token.email.lower() in resource.data.invitedEmails
+        && 'sharedWith' in request.resource.data
+        && request.auth.uid in request.resource.data.sharedWith
+        && (
+          !('sharedWith' in resource.data)
+          || !(request.auth.uid in resource.data.sharedWith)
+        )
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['sharedWith', 'invitedEmails', 'inactiveMemberUids', 'inactiveMemberReasons']);
+    }
+
+    /** 이미 제한된 계정이 본인 사유를 탈퇴(WITHDRAWN)로 맞출 때 */
+    function isMarkingOwnWithdrawn() {
+      return isSignedIn()
+        && meetingSelfServiceKeys()
+        && isNotAddingSelfToSharedWith()
+        && 'inactiveMemberUids' in request.resource.data
+        && request.auth.uid in request.resource.data.inactiveMemberUids
+        && 'inactiveMemberReasons' in request.resource.data
+        && request.resource.data.inactiveMemberReasons[request.auth.uid] == 'WITHDRAWN'
+        && (
+          ('sharedWith' in resource.data && request.auth.uid in resource.data.sharedWith)
+          || ('inactiveMemberUids' in resource.data && request.auth.uid in resource.data.inactiveMemberUids)
+        );
+    }
+
+    function isMeetingOwner(meetingId) {
+      return isSignedIn()
+        && meetingData(meetingId).ownerUid == request.auth.uid;
+    }
+
+    function isMeetingTreasurer(meetingId) {
+      let data = meetingData(meetingId);
+      return isSignedIn()
+        && 'adminUid' in data
+        && data.adminUid is string
+        && data.adminUid.size() > 0
+        && request.auth.uid == data.adminUid;
+    }
+
+    // 모임관리자(개설자) · 지정 운영관리자 · 시스템관리자
+    function isMeetingManager(meetingId) {
+      return isSystemAdmin()
+        || isMeetingOwner(meetingId)
+        || isMeetingTreasurer(meetingId);
+    }
+
+    function isMeetingMember(meetingId) {
+      return isSystemAdmin()
+        || isMeetingOwner(meetingId)
+        || isMeetingTreasurer(meetingId)
+        || isInSharedWith(meetingData(meetingId));
+    }
+
+    /** 휴면·탈퇴로 sharedWith에서 빠져도 본인 명단(상태)은 조회할 수 있다. */
+    function isOwnMemberRecord(docId) {
+      return isSignedIn() && (
+        request.auth.uid == docId
+        || (
+          resource != null
+          && 'linkedUid' in resource.data
+          && resource.data.linkedUid == request.auth.uid
+        )
+        || (
+          resource != null
+          && resource.data.email is string
+          && request.auth.token.email is string
+          && resource.data.email.lower() == request.auth.token.email.lower()
+        )
+      );
+    }
+
+    function isMeetingAdmin(meetingId) {
+      return isMeetingManager(meetingId);
+    }
+
+    match /userProfiles/{userId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 모임 검색용 공개 디렉터리 (이름·설명만, 모든 로그인 사용자 조회)
+    match /meetingDirectory/{meetingId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && (
+          isSystemAdmin()
+          || request.resource.data.ownerUid == request.auth.uid
+          || isMeetingManager(meetingId)
+        );
+      // 모임 문서가 이미 없어도 디렉터리 항목의 개설자면 삭제 가능
+      allow delete: if isSignedIn() && (
+        isSystemAdmin()
+        || resource.data.ownerUid == request.auth.uid
+      );
+    }
+
+    match /meetings/{meetingId} {
+      // 로그인 사용자: 전체 모임 검색·목록
+      allow get, list: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.auth.uid in request.resource.data.sharedWith;
+
+      allow update: if isMeetingManager(meetingId)
+        || isLeavingMeetingSelf()
+        || isMarkingOwnWithdrawn()
+        || isClaimingEmailInvite();
+      allow delete: if isMeetingOwner(meetingId) || isSystemAdmin();
+
+      match /joinRequests/{requestId} {
+        allow create: if isSignedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status in ['PENDING', 'WITHDRAWN'];
+
+        allow read: if isSignedIn() && (
+          request.auth.uid == resource.data.uid
+          || isMeetingManager(meetingId)
+        );
+
+        allow update: if isMeetingManager(meetingId)
+          || (
+            isSignedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.status == 'WITHDRAWN'
+          )
+          || (
+            isSignedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.status == 'PENDING'
+            && resource.data.status in ['REJECTED', 'WITHDRAWN', 'PENDING']
+          )
+          || (
+            isSignedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid
+            && resource.data.status == 'APPROVED'
+            && request.resource.data.status == 'APPROVED'
+            && request.resource.data.profileCompleted == true
+          );
+
+        allow delete: if isMeetingManager(meetingId)
+          || (
+            isSignedIn()
+            && resource.data.uid == request.auth.uid
+            && resource.data.status == 'REJECTED'
+          );
+      }
+
+      match /security/{docId} {
+        allow read, create, update, delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /members/{docId} {
+        allow read: if isMeetingMember(meetingId) || isOwnMemberRecord(docId);
+        allow create: if isMeetingAdmin(meetingId)
+          || (
+            isMeetingMember(meetingId)
+            && request.resource.data.linkedUid == request.auth.uid
+            && request.auth.uid == docId
+            && request.resource.data.role == 'GENERAL'
+          )
+          || (
+            isSignedIn()
+            && request.resource.data.linkedUid == request.auth.uid
+            && request.auth.uid == docId
+            && request.resource.data.status == 'WITHDRAWN'
+            && request.resource.data.role == 'GENERAL'
+          );
+        allow update: if isMeetingAdmin(meetingId)
+          || (
+            isSignedIn()
+            && request.resource.data.status == 'WITHDRAWN'
+            && request.resource.data.linkedUid == request.auth.uid
+            && (
+              resource.data.linkedUid == request.auth.uid
+              || request.auth.uid == docId
+              || (
+                resource.data.email is string
+                && request.auth.token.email is string
+                && resource.data.email.lower() == request.auth.token.email.lower()
+              )
+            )
+          )
+          || (
+            isMeetingMember(meetingId)
+            && request.resource.data.linkedUid == request.auth.uid
+            && (
+              // 본인 명단 수정
+              (
+                resource.data.linkedUid == request.auth.uid
+                && request.auth.uid == docId
+              )
+              // 초대/승인 후 회원정보 입력: 미연결 동일 이름 명단을 본인 계정에 연결·수정
+              || (
+                (!('linkedUid' in resource.data) || resource.data.linkedUid == '')
+                && resource.data.name is string
+                && request.resource.data.name is string
+                && resource.data.name == request.resource.data.name
+              )
+            )
+          );
+        allow delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /transactions/{docId} {
+        allow read: if isMeetingMember(meetingId);
+        allow create, update, delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /dues/{docId} {
+        allow read: if isMeetingMember(meetingId);
+        allow create, update, delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /histories/{docId} {
+        allow read: if isMeetingMember(meetingId);
+        allow create, update, delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /accounts/{docId} {
+        allow read: if isMeetingMember(meetingId);
+        allow create, update, delete: if isMeetingAdmin(meetingId);
+      }
+
+      match /eventExpenses/{docId} {
+        allow read: if isMeetingMember(meetingId);
+        allow create, update, delete: if isMeetingAdmin(meetingId);
+      }
+    }
+
+    // collectionGroup("joinRequests") — 내 가입 요청 상태(승인 대기/거절) 조회
+    match /{path=**}/joinRequests/{requestId} {
+      allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">모으다</string>
+    <string name="shortcut_register_transaction_short">장부 등록</string>
+    <string name="shortcut_register_transaction_long">입출금 장부 등록</string>
+    <string name="default_web_client_id">236502031143-q87kphe946cp3amhbusliai7dmm7ekkp.apps.googleusercontent.com</string>
+</resources>

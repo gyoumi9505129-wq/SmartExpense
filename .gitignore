@@ -1,0 +1,43 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Local configuration (SDK paths — machine-specific)
+local.properties
+
+# Signing secrets (절대 커밋하지 않음 — 별도 백업 필수)
+*.jks
+*.keystore
+*.p12
+keystore.properties
+**/release/*.keystore
+**/release/*.jks
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Kotlin
+.kotlin/
+
+# Android Studio captures
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Generated PDF page images (local extraction artifacts)
+pdf/pages/
+
+# Local dev script outputs
+scripts/*.json
+scripts/m3src/
+
+# Firebase local cache
+.firebase/

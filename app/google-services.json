@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "236502031143",
+    "project_id": "smartexpense-55679",
+    "storage_bucket": "smartexpense-55679.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:236502031143:android:47f49cd14360351f182702",
+        "android_client_info": {
+          "package_name": "com.smartexpense"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "236502031143-ha676fjit6lk13rtlati5gdl72mrttlg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.smartexpense",
+            "certificate_hash": "61a845c7c0bcf65a7d3b4c9f82e441fa98deb722"
+          }
+        },
+        {
+          "client_id": "236502031143-q87kphe946cp3amhbusliai7dmm7ekkp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDa_z1stXH_MUroJLG-y3ivsHsqgTaXlZ0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "236502031143-q87kphe946cp3amhbusliai7dmm7ekkp.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

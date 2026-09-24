@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ko" style="height:100%;">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>주소 검색</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #ffffff;
+        }
+        #layer {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="layer"></div>
+    <script>
+        function initPostcode() {
+            new daum.Postcode({
+                oncomplete: function(data) {
+                    window.Android.processDATA(data.roadAddress);
+                },
+                width: '100%',
+                height: '100%'
+            }).embed(document.getElementById('layer'));
+        }
+
+        function loadPostcodeScript() {
+            var script = document.createElement('script');
+            script.src = 'https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js';
+            script.onload = initPostcode;
+            script.onerror = function() {
+                document.getElementById('layer').innerHTML =
+                    '<p style="padding:16px;font-family:sans-serif;">우편번호 서비스를 불러오지 못했습니다.<br>인터넷 연결을 확인해 주세요.</p>';
+            };
+            document.head.appendChild(script);
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadPostcodeScript);
+        } else {
+            loadPostcodeScript();
+        }
+    </script>
+</body>
+</html>
