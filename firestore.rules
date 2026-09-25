@@ -128,7 +128,9 @@ service cloud.firestore {
     match /userProfiles/{userId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && request.auth.uid == userId;
-      allow delete: if isSignedIn() && request.auth.uid == userId;
+      // 본인 또는 시스템관리자(강퇴·중복 정리 시 프로필 삭제)
+      allow delete: if isSignedIn()
+        && (request.auth.uid == userId || isSystemAdmin());
     }
 
     // 모임 검색용 공개 디렉터리 (이름·설명만, 모든 로그인 사용자 조회)

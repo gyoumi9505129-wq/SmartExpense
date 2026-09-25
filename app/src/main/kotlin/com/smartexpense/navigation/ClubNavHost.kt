@@ -9,6 +9,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Group
@@ -49,6 +50,7 @@ import com.smartexpense.ui.club.member.MemberManagementScreen
 import com.smartexpense.ui.club.report.YearlyReportScreen
 import com.smartexpense.ui.club.transaction.TransactionScreen
 import com.smartexpense.ui.club.transaction.TransactionViewModel
+import com.smartexpense.ui.settings.AccountsAdminScreen
 import com.smartexpense.ui.settings.SettingsScreen
 import com.smartexpense.ui.settings.account.ClubAccountScreen
 import com.smartexpense.ui.settings.bank.BankParsingSettingsScreen
@@ -76,6 +78,9 @@ private val bottomNavItems = listOf(
     ClubBottomNavItem("경조", Icons.Default.Celebration),
     ClubBottomNavItem("결산", Icons.Default.Assessment)
 )
+
+/** 개설자·시스템관리자에게만 노출되는 「관리」 탭(계정 강퇴/삭제 등). [bottomNavItems] 뒤에 조건부로 붙습니다. */
+private val adminNavItem = ClubBottomNavItem("관리", Icons.Default.AdminPanelSettings)
 
 @Composable
 fun ClubNavHost(
@@ -221,6 +226,10 @@ private fun ClubMainTabs(
     val onSwitchClub = {
         clubNameViewModel.leaveCurrentClub(onNavigateToClubList)
     }
+    val canManageAccounts by clubNameViewModel.canManageAccounts.collectAsStateWithLifecycle()
+    // 개설자·시스템관리자만 「관리」 탭이 추가되어 총 6개, 그 외 회원은 기본 5개 탭을 봅니다.
+    val navItems = if (canManageAccounts) bottomNavItems + adminNavItem else bottomNavItems
+    val adminTabIndex = bottomNavItems.size
     val context = LocalContext.current
     val bankNotificationCoordinator = remember {
         EntryPointAccessors.fromApplication(
@@ -231,7 +240,7 @@ private fun ClubMainTabs(
     var savedTabIndex by rememberSaveable { mutableIntStateOf(0) }
     val pagerState = rememberPagerState(
         initialPage = savedTabIndex,
-        pageCount = { bottomNavItems.size }
+        pageCount = { navItems.size }
     )
     val coroutineScope = rememberCoroutineScope()
     var bankNotificationOpenTick by remember { mutableIntStateOf(0) }
@@ -267,6 +276,7 @@ private fun ClubMainTabs(
         containerColor = BackgroundBlack,
         bottomBar = {
             ClubBottomNavigationBar(
+                items = navItems,
                 selectedIndex = selectedTabIndex,
                 onTabClick = { index ->
                     if (index != pagerState.settledPage) {
@@ -319,6 +329,12 @@ private fun ClubMainTabs(
                     onSwitchClub = onSwitchClub,
                     isScreenActive = selectedTabIndex == 4
                 )
+                adminTabIndex -> AccountsAdminScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    onOpenSettings = onOpenSettings,
+                    onSwitchClub = onSwitchClub,
+                    isScreenActive = selectedTabIndex == adminTabIndex
+                )
             }
         }
     }
@@ -326,6 +342,7 @@ private fun ClubMainTabs(
 
 @Composable
 private fun ClubBottomNavigationBar(
+    items: List<ClubBottomNavItem>,
     selectedIndex: Int,
     onTabClick: (Int) -> Unit
 ) {
@@ -335,7 +352,7 @@ private fun ClubBottomNavigationBar(
         tonalElevation = 0.dp,
         windowInsets = NavigationBarDefaults.windowInsets
     ) {
-        bottomNavItems.forEachIndexed { index, item ->
+        items.forEachIndexed { index, item ->
             NavigationBarItem(
                 selected = selectedIndex == index,
                 onClick = { onTabClick(index) },

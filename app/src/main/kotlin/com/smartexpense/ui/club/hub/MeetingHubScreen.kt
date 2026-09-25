@@ -9,9 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -19,10 +17,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -34,7 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,7 +55,6 @@ import com.smartexpense.ui.theme.BackgroundBlack
 import com.smartexpense.ui.theme.BorderLine
 import com.smartexpense.ui.theme.ExpenseRed
 import com.smartexpense.ui.theme.IncomeBlue
-import com.smartexpense.ui.theme.InterestGold
 import com.smartexpense.ui.theme.SurfaceDeepGray
 import com.smartexpense.ui.theme.TextPrimary
 import com.smartexpense.ui.theme.TextSecondary
@@ -75,12 +69,28 @@ fun MeetingHubScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    RefreshOnScreenVisible(onRefresh = { viewModel.refreshHub(userInitiated = false) })
+    RefreshOnScreenVisible(onRefresh = {
+        viewModel.onHubVisible()
+        viewModel.refreshHub(userInitiated = false)
+    })
 
     LaunchedEffect(uiState.snackbarMessage) {
         val message = uiState.snackbarMessage ?: return@LaunchedEffect
         viewModel.consumeSnackbar()
         snackbarHostState.showSnackbar(message)
+    }
+
+    // 로그인 후 한우리/샘플로 바로 입장 (웹과 동일 흐름)
+    LaunchedEffect(uiState.isLoading, uiState.autoEnterCandidate?.meeting?.id) {
+        if (uiState.isLoading) return@LaunchedEffect
+        val item = uiState.autoEnterCandidate ?: return@LaunchedEffect
+        viewModel.consumeAutoEnter()
+        when (item.accessStatus) {
+            MeetingAccessStatus.AVAILABLE,
+            MeetingAccessStatus.PENDING,
+            MeetingAccessStatus.REJECTED -> viewModel.enterSampleMode(onMeetingEntered)
+            else -> viewModel.enterMeeting(item.meeting, onMeetingEntered)
+        }
     }
 
     MeetingHubDialogs(
@@ -109,15 +119,6 @@ fun MeetingHubScreen(
                             tint = TextPrimary
                         )
                     }
-                    if (uiState.pendingApprovals.isNotEmpty()) {
-                        IconButton(onClick = viewModel::openApprovalSheet) {
-                            Icon(
-                                Icons.Default.Notifications,
-                                contentDescription = "가입 승인",
-                                tint = InterestGold
-                            )
-                        }
-                    }
                     IconButton(onClick = viewModel::openSettingsSheet) {
                         Icon(
                             Icons.Default.Settings,
@@ -129,17 +130,7 @@ fun MeetingHubScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundBlack)
             )
         },
-        floatingActionButton = {
-            if (uiState.selectedTab == MeetingHubTab.CREATE) {
-                FloatingActionButton(
-                    onClick = viewModel::openCreateDialog,
-                    containerColor = IncomeBlue,
-                    contentColor = TextPrimary
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "모임 만들기")
-                }
-            }
-        }
+        floatingActionButton = { }
     ) { padding ->
         val visibleTabs = uiState.visibleTabs
         val selectedIndex = visibleTabs.indexOf(uiState.selectedTab).coerceAtLeast(0)
@@ -158,88 +149,43 @@ fun MeetingHubScreen(
                 .padding(padding)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                TabRow(
-                    selectedTabIndex = selectedIndex,
-                    containerColor = BackgroundBlack,
-                    contentColor = TextPrimary
-                ) {
-                    visibleTabs.forEach { tab ->
-                        Tab(
-                            selected = uiState.selectedTab == tab,
-                            onClick = { viewModel.selectTab(tab) },
-                            text = { Text(uiState.tabLabel(tab)) }
-                        )
+                if (visibleTabs.size > 1) {
+                    TabRow(
+                        selectedTabIndex = selectedIndex,
+                        containerColor = BackgroundBlack,
+                        contentColor = TextPrimary
+                    ) {
+                        visibleTabs.forEach { tab ->
+                            Tab(
+                                selected = uiState.selectedTab == tab,
+                                onClick = { viewModel.selectTab(tab) },
+                                text = { Text(uiState.tabLabel(tab)) }
+                            )
+                        }
                     }
                 }
 
                 when {
-                    uiState.isLoading -> {
+                    // 자동 입장 중에는 목록을 그리지 않음 (관리자 허브 깜빡임 방지)
+                    uiState.isLoading ||
+                        uiState.autoEnterCandidate != null ||
+                        uiState.isAutoEntering ||
+                        uiState.isSubmitting -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = TextPrimary)
                         }
                     }
 
-                    uiState.selectedTab == MeetingHubTab.SEARCH -> {
-                        MeetingSearchField(
-                            query = uiState.searchQuery,
-                            onQueryChange = viewModel::updateSearchQuery
-                        )
-                        MeetingItemList(
-                            items = uiState.searchableMeetings,
-                            isSubmitting = uiState.isSubmitting,
-                            emptyTitle = if (uiState.searchQuery.isBlank()) {
-                                "검색할 모임이 없습니다"
-                            } else {
-                                "검색 결과 없음"
-                            },
-                            emptyDescription = if (uiState.searchQuery.isBlank()) {
-                                "누구나 모임을 검색해 가입을 요청할 수 있습니다.\n상단 새로고침을 눌러 최신 목록을 불러오세요."
-                            } else {
-                                "「${uiState.searchQuery}」 모임이 없거나 목록을 불러오지 못했습니다.\n새로고침 후 다시 검색해 보세요."
-                            },
-                            onEnter = { viewModel.enterMeeting(it.meeting, onMeetingEntered) },
-                            onJoinRequest = viewModel::openJoinDialog,
-                            onCompleteProfile = {
-                                viewModel.openMemberProfilePrompt(it.meeting, enterAfterSave = true)
-                            }
-                        )
-                    }
-
-                    uiState.selectedTab == MeetingHubTab.APPROVALS -> {
-                        ApprovalSheetContent(
-                            pendingApprovals = uiState.pendingApprovals,
-                            onApprove = viewModel::approveRequest,
-                            onReject = viewModel::rejectRequest
-                        )
-                    }
-
-                    uiState.selectedTab == MeetingHubTab.CREATE -> {
-                        CreateMeetingTabContent(onCreateClick = viewModel::openCreateDialog)
-                    }
-
                     else -> {
-                        if (uiState.isElevated) {
-                            MeetingSearchField(
-                                query = uiState.searchQuery,
-                                onQueryChange = viewModel::updateSearchQuery
-                            )
-                        }
-                        MemberProfileRequestBanner(
-                            items = uiState.pendingProfileMeetings,
-                            onCompleteProfile = {
-                                viewModel.openMemberProfilePrompt(it.meeting, enterAfterSave = true)
-                            }
-                        )
+                        // 모임 목록(대기 화면)은 더 이상 쓰지 않음 — 미승인 시 샘플 안내만
                         MeetingItemList(
-                            items = uiState.filteredMyMeetings(),
-                            isSubmitting = uiState.isSubmitting,
-                            emptyTitle = "내 모임 없음",
-                            emptyDescription = "모임을 만들면 그 모임의 관리자가 됩니다.\n다른 모임은 「모임 찾기」에서 가입을 요청하세요. 승인 여부는 새로고침으로 확인할 수 있습니다.",
-                            onEnter = { viewModel.enterMeeting(it.meeting, onMeetingEntered) },
-                            onJoinRequest = viewModel::openJoinDialog,
-                            onCompleteProfile = {
-                                viewModel.openMemberProfilePrompt(it.meeting, enterAfterSave = true)
-                            }
+                            items = emptyList(),
+                            isSubmitting = false,
+                            emptyTitle = "한우리 샘플",
+                            emptyDescription = "승인 전에는 로컬 샘플로 체험할 수 있습니다.\n설정(⚙)에서 「승인 요청」을 보내세요. 승인되면 실데이터를 볼 수 있습니다.",
+                            onEnter = { },
+                            onJoinRequest = { },
+                            onCompleteProfile = { }
                         )
                     }
                 }
@@ -315,20 +261,7 @@ private fun MeetingHubDialogs(
         }
     }
 
-    if (uiState.showApprovalSheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = viewModel::dismissApprovalSheet,
-            sheetState = sheetState,
-            containerColor = SurfaceDeepGray
-        ) {
-            ApprovalSheetContent(
-                pendingApprovals = uiState.pendingApprovals,
-                onApprove = viewModel::approveRequest,
-                onReject = viewModel::rejectRequest
-            )
-        }
-    }
+    // 가입 승인은 모임 안 「관리」 탭에서 처리 (허브 시트/탭 제거)
 
     // 로그인 방식 선택 다이얼로그 (선택 시 등록/변경 입력으로 이동)
     if (uiState.settings.showUnlockMethodDialog) {
@@ -492,11 +425,8 @@ private fun MeetingHubDialogs(
             onDismiss = viewModel::dismissSettingsSheet,
             onDisplayNameChange = viewModel::updateProfileDisplayName,
             onPhoneChange = viewModel::updateProfilePhone,
-            onCurrentPasswordChange = viewModel::updateCurrentPassword,
-            onNewPasswordChange = viewModel::updateNewPassword,
-            onConfirmPasswordChange = viewModel::updateConfirmPassword,
             onSaveProfile = viewModel::saveProfile,
-            onChangePassword = viewModel::changePassword,
+            onRequestAccess = viewModel::requestAccessFromSettings,
             onRequestLogout = viewModel::requestLogout,
             onDismissLogoutConfirm = viewModel::dismissLogoutConfirm,
             onConfirmLogout = viewModel::confirmLogout,

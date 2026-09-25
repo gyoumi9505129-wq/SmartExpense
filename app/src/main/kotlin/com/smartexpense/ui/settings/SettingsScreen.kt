@@ -60,6 +60,7 @@ import com.smartexpense.ui.common.RefreshOnScreenVisible
 import com.smartexpense.ui.common.UserRoleBadge
 import com.smartexpense.ui.theme.BackgroundBlack
 import com.smartexpense.ui.theme.ExpenseRed
+import com.smartexpense.ui.theme.IncomeBlue
 import com.smartexpense.ui.theme.TextPrimary
 import com.smartexpense.ui.theme.TextSecondary
 
@@ -454,20 +455,46 @@ fun SettingsScreen(
                         Text(
                             text = when {
                                 uiState.isSystemAdmin -> "모든 모임을 관리할 수 있습니다"
-                                uiState.isMeetingOwner -> "운영관리자 지정·편집·올리기/내리기·삭제가 가능합니다"
+                                uiState.isMeetingOwner -> "총무 지정·편집·올리기/내리기·삭제가 가능합니다"
                                 uiState.canEdit -> "편집·올리기/내리기가 가능합니다"
-                                else -> "조회만 가능합니다. 다른 모임은 찾아 가입하거나 직접 만들 수 있습니다"
+                                uiState.accessRequestStatus == "PENDING" ->
+                                    "승인 요청이 대기 중입니다. 승인되면 실데이터를 볼 수 있습니다"
+                                uiState.accessRequestStatus == "APPROVED" ->
+                                    "이용이 승인되었습니다"
+                                else -> "샘플 조회 중입니다. 아래에서 승인 요청을 보내세요"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
+                        if (!uiState.isSystemAdmin &&
+                            !uiState.isMeetingOwner &&
+                            !uiState.canEdit &&
+                            (uiState.canRequestAccess || uiState.accessRequestStatus == "PENDING")
+                        ) {
+                            Button(
+                                onClick = viewModel::requestMeetingAccess,
+                                enabled = uiState.canRequestAccess && !uiState.isRequestingAccess,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = IncomeBlue,
+                                    contentColor = TextPrimary,
+                                    disabledContainerColor = IncomeBlue.copy(alpha = 0.4f),
+                                    disabledContentColor = TextPrimary.copy(alpha = 0.7f)
+                                )
+                            ) {
+                                Text(
+                                    text = when {
+                                        uiState.isRequestingAccess -> "요청 중…"
+                                        uiState.accessRequestStatus == "PENDING" -> "승인 대기 중"
+                                        else -> "승인 요청"
+                                    },
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
-                    SettingsItemDivider()
-                    SettingsNavigationItem(
-                        title = "다른 모임 선택",
-                        subtitle = "다른 동호회·모임으로 전환합니다",
-                        onClick = { viewModel.switchClub(onSwitchClub) }
-                    )
                     if (uiState.canEdit) {
                         SettingsItemDivider()
                         SettingsNavigationItem(
@@ -521,10 +548,10 @@ fun SettingsScreen(
                         )
                         SettingsItemDivider()
                         SettingsNavigationItem(
-                            title = "운영관리자 지정",
+                            title = "총무 지정",
                             subtitle = uiState.designatedTreasurerUid?.let { uid ->
                                 "지정됨 · UID ${uid.take(8)}…"
-                            } ?: "이 모임의 운영관리자로 지정할 계정",
+                            } ?: "이 모임의 총무로 지정할 계정",
                             enabled = !isFirebaseSyncing && !uiState.isDesignatingTreasurer,
                             onClick = viewModel::openDesignateTreasurerDialog
                         )
@@ -533,6 +560,8 @@ fun SettingsScreen(
             }
 
             // 보안(로그인 방식·생체 인증)은 모임 선택 화면 우상단 설정에서 관리합니다.
+
+            // 강퇴/삭제·중복 계정 정리(「계정 관리」)는 바텀 네비게이션의 「관리」 탭(AccountsAdminScreen)으로 이동했습니다.
 
             if (uiState.canSync) { // 관리자·운영관리자만 클라우드 올리기/내리기 메뉴 표시
                 item {
@@ -918,11 +947,11 @@ private fun DesignateTreasurerDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
-        title = { Text("운영관리자 지정", color = TextPrimary) },
+        title = { Text("총무 지정", color = TextPrimary) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "「$clubName」의 운영관리자로 설정할 구글 계정 이메일(또는 Firebase UID)을 입력하세요.",
+                    text = "「$clubName」의 총무로 설정할 구글 계정 이메일(또는 Firebase UID)을 입력하세요.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
@@ -1054,38 +1083,6 @@ private fun ResetSeedConfirmDialog(
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text("재설정", color = ExpenseRed)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("취소", color = TextSecondary)
-            }
-        },
-        containerColor = com.smartexpense.ui.theme.SurfaceDeepGray
-    )
-}
-
-@Composable
-private fun SettingsActionConfirmDialog(
-    title: String,
-    message: String,
-    confirmLabel: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title, color = TextPrimary) },
-        text = {
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(confirmLabel, color = ExpenseRed)
             }
         },
         dismissButton = {
@@ -1290,3 +1287,6 @@ private fun BackupRestoreErrorDialog(
         containerColor = com.smartexpense.ui.theme.SurfaceDeepGray
     )
 }
+
+// 「가입 계정」 목록 + 강퇴/삭제 UI(AccountManagementSection/AccountRow)는
+// ui/settings/AccountsAdminScreen.kt (바텀 네비게이션 「관리」 탭)로 이동했습니다.

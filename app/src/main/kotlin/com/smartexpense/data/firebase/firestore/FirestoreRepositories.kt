@@ -456,6 +456,39 @@ class MeetingFirestoreRepository @Inject constructor(
             .await()
     }
 
+    /**
+     * 강퇴/삭제 — 웹 access.ts의 purgeMeetingAccount 대응.
+     * UID를 inactiveMemberUids에 남기지 않고 접근을 제거합니다(sharedWith/inactive/reason 모두 제거).
+     * 총무였다면 지정을 해제합니다. 개설자는 삭제할 수 없습니다.
+     * 가입요청·명단 linkedUid·프로필 정리는 [JoinRequestFirestoreRepository.purgeMeetingAccount]에서 이어서 처리합니다.
+     */
+    suspend fun purgeMeetingAccount(meetingId: String, uid: String) {
+        authRepository.requireUid()
+        require(uid.isNotBlank()) { "사용자 UID가 비어 있습니다." }
+        val meeting = getMeeting(meetingId) ?: throw IllegalStateException("모임을 찾을 수 없습니다.")
+        if (meeting.ownerUid == uid) {
+            throw IllegalStateException("모임관리자 계정은 삭제할 수 없습니다.")
+        }
+        val wasTreasurer = meeting.adminUid.isNotBlank() && meeting.adminUid == uid
+        val updates: MutableMap<String, Any> = mutableMapOf(
+            "sharedWith" to FieldValue.arrayRemove(uid),
+            "inactiveMemberUids" to FieldValue.arrayRemove(uid),
+            "inactiveMemberReasons.$uid" to FieldValue.delete()
+        )
+        if (wasTreasurer) {
+            updates["adminUid"] = ""
+        }
+        db.document(FirestorePaths.meeting(meetingId)).update(updates).await()
+
+        if (wasTreasurer) {
+            runCatching {
+                db.document(FirestorePaths.meetingDirectoryEntry(meetingId))
+                    .set(mapOf("adminUid" to ""), SetOptions.merge())
+                    .await()
+            }
+        }
+    }
+
     /** 본인이 모임에서 나가 접근을 끊는다. 탈퇴 시 사용 중지 목록에 남긴다. */
     suspend fun removeSelfAccess(
         meetingId: String,
@@ -925,7 +958,7 @@ class JoinRequestFirestoreRepository @Inject constructor(
                 "status" to JoinRequestStatus.APPROVED.name,
                 "decidedAt" to now,
                 "decidedBy" to uid,
-                "profileCompleted" to false
+                "profileCompleted" to true
             )
         ).await()
         val accessUid = runCatching {
@@ -1085,6 +1118,64 @@ class JoinRequestFirestoreRepository @Inject constructor(
                 (rawEmail.isNotBlank() && requestEmail.equals(rawEmail, ignoreCase = true))
         }
     }
+
+    /**
+     * 강퇴/삭제 — 웹 access.ts의 purgeMeetingAccount 대응.
+     * - sharedWith 제거(+총무였다면 해제), inactiveMemberUids에는 남기지 않음
+     * - 해당 uid의 가입요청 전부 삭제(거절 상태로 남기지 않음)
+     * - 회원 명단의 linkedUid 연결 해제(명단 자체는 유지)
+     * - userProfiles/{uid} 삭제(재가입 시 중복 표시 방지)
+     */
+    suspend fun purgeMeetingAccount(meetingId: String, uid: String) {
+        authRepository.requireUid()
+        require(uid.isNotBlank()) { "사용자 UID가 비어 있습니다." }
+
+        meetingFirestoreRepository.purgeMeetingAccount(meetingId, uid)
+        deleteJoinRequestsForAccount(meetingId, uid = uid, email = null)
+        runCatching { memberFirestoreRepository.clearLinkedUid(meetingId, uid) }
+        runCatching { userProfileFirestoreRepository.deleteProfile(uid) }
+    }
+
+    data class DuplicateAccountCleanupResult(
+        val removedUids: List<String>,
+        val email: String
+    )
+
+    /**
+     * 같은 이메일의 중복 UID를 정리합니다 — 웹 access.ts의 cleanupDuplicateAccountsByKeepUid 대응.
+     * keepUid만 sharedWith에 남기고, 같은 이메일의 다른 UID는 완전 삭제(강퇴)합니다.
+     */
+    suspend fun cleanupDuplicateAccountsByKeepUid(
+        meetingId: String,
+        keepUid: String
+    ): DuplicateAccountCleanupResult {
+        authRepository.requireUid()
+        require(keepUid.isNotBlank()) { "남길 UID가 비어 있습니다." }
+
+        val profiles = userProfileFirestoreRepository.getAllProfiles()
+        val keep = profiles.firstOrNull { it.uid == keepUid }
+            ?: throw IllegalStateException("남길 UID의 프로필을 찾을 수 없습니다.")
+        val email = keep.email.trim().lowercase()
+        require(email.isNotBlank()) { "남길 계정의 이메일이 비어 있습니다." }
+
+        val removeUids = profiles
+            .filter { it.email.trim().lowercase() == email && it.uid != keepUid }
+            .map { it.uid }
+        removeUids.forEach { uid -> purgeMeetingAccount(meetingId, uid) }
+
+        // keepUid에 PENDING 요청이 있으면 승인, 없으면 접근만 보장
+        val keepPending = runCatching { getMyJoinRequest(meetingId, keepUid) }.getOrNull()
+        if (keepPending != null && keepPending.status == JoinRequestStatus.PENDING) {
+            approveJoinRequest(meetingId, keepPending.id)
+        } else {
+            val meeting = meetingFirestoreRepository.getMeeting(meetingId)
+            if (meeting != null && meeting.ownerUid != keepUid && !meeting.sharedWith.contains(keepUid)) {
+                meetingFirestoreRepository.inviteUid(meetingId, keepUid)
+            }
+        }
+
+        return DuplicateAccountCleanupResult(removedUids = removeUids, email = email)
+    }
 }
 
 @Singleton
@@ -1175,6 +1266,21 @@ class UserProfileFirestoreRepository @Inject constructor(
             .await()
         val doc = snapshot.documents.firstOrNull() ?: return null
         return doc.getString("uid") ?: doc.id
+    }
+
+    /** 계정 관리(강퇴/중복 정리) 화면에서 전체 프로필을 나열할 때 사용합니다. */
+    suspend fun getAllProfiles(): List<UserProfileDoc> {
+        val snapshot = db.collection(FirestorePaths.USER_PROFILES).get().await()
+        return snapshot.documents.map { UserProfileDoc.from(it) }
+    }
+
+    /**
+     * 강퇴/중복 정리 시 프로필을 삭제합니다. 재가입 시 중복 표시를 막기 위함입니다.
+     * Firestore 규칙상 본인 또는 시스템관리자만 삭제할 수 있어 실패할 수 있으므로 호출부에서 감싸는 것을 권장합니다.
+     */
+    suspend fun deleteProfile(uid: String) {
+        if (uid.isBlank()) return
+        db.document(FirestorePaths.userProfile(uid)).delete().await()
     }
 }
 
@@ -1274,6 +1380,22 @@ class MemberFirestoreRepository @Inject constructor(
             }
         }
         return null
+    }
+
+    /**
+     * 강퇴/삭제 시 명단 자체는 유지하되, 삭제된 계정을 가리키던 linkedUid만 해제합니다.
+     * (웹 access.ts purgeMeetingAccount의 members linkedUid 해제와 동일)
+     */
+    suspend fun clearLinkedUid(meetingId: String, uid: String) {
+        if (uid.isBlank()) return
+        authRepository.requireUid()
+        val snapshot = db.collection(FirestorePaths.members(meetingId))
+            .whereEqualTo("linkedUid", uid)
+            .get()
+            .await()
+        snapshot.documents.forEach { doc ->
+            doc.reference.set(mapOf("linkedUid" to ""), SetOptions.merge()).await()
+        }
     }
 
     suspend fun pruneSystemAdminMembers(meetingId: String) {

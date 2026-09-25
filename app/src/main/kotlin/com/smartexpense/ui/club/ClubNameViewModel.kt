@@ -33,6 +33,15 @@ class ClubNameViewModel @Inject constructor(
             initialValue = UserRole.MEMBER
         )
 
+    /** 시스템관리자 전용 — 바텀 네비게이션 「관리」 탭(가입승인·강퇴/삭제) 노출 */
+    val canManageAccounts: StateFlow<Boolean> = meetingRoleRepository.isSystemAdmin
+        .catch { emit(false) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = false
+        )
+
     private val pushedSlogan = MutableStateFlow<SelectedClubDisplayNotifier.SloganUpdate?>(null)
 
     init {

@@ -8,7 +8,6 @@ import com.smartexpense.data.firebase.PrivilegedAuthConfig
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
 import com.smartexpense.data.firebase.auth.FirebaseAuthSession
-import com.smartexpense.data.firebase.auth.toEmailAuthErrorMessage
 import com.smartexpense.data.firebase.firestore.JoinRequestDoc
 import com.smartexpense.data.firebase.firestore.JoinRequestFirestoreRepository
 import com.smartexpense.data.firebase.firestore.JoinRequestStatus
@@ -19,8 +18,10 @@ import com.smartexpense.data.firebase.firestore.UserProfileFirestoreRepository
 import com.smartexpense.data.local.entity.club.ClubMembershipStatus
 import com.smartexpense.data.local.entity.club.MemberRole
 import com.smartexpense.data.local.entity.club.MemberStatus
+import com.smartexpense.data.local.seed.SampleClubSeeder
 import com.smartexpense.data.repository.club.MeetingClubSyncRepository
 import com.smartexpense.data.repository.club.MeetingMemberEnrollmentRepository
+import com.smartexpense.data.repository.club.SelectedClubRepository
 import com.smartexpense.data.session.UserSessionManager
 import com.smartexpense.data.repository.security.AppLockRepository
 import com.smartexpense.domain.security.AppLockUnlockMethod
@@ -59,7 +60,9 @@ class MeetingHubViewModel @Inject constructor(
     private val memberLoginPolicy: MemberLoginPolicy,
     private val userSessionManager: UserSessionManager,
     private val appLockRepository: AppLockRepository,
-    private val biometricAuthManager: BiometricAuthManager
+    private val biometricAuthManager: BiometricAuthManager,
+    private val selectedClubRepository: SelectedClubRepository,
+    private val sampleClubSeeder: SampleClubSeeder
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MeetingHubUiState())
@@ -77,6 +80,16 @@ class MeetingHubViewModel @Inject constructor(
     private var lastProfileUid: String? = null
     private var lastManagedMeetingKey: String? = null
     private var lastJoinRefreshKey: String? = null
+    private var didOfferAutoEnter: Boolean = false
+
+    /** 허브 화면이 다시 보일 때 호출 — 관리자도 목록에 머물지 않고 재입장 */
+    fun onHubVisible() {
+        didOfferAutoEnter = false
+        _uiState.update {
+            it.copy(isAutoEntering = false, autoEnterCandidate = null)
+        }
+        rebuildLists()
+    }
 
     init {
         viewModelScope.launch {
@@ -318,15 +331,88 @@ class MeetingHubViewModel @Inject constructor(
     fun openSettingsSheet() {
         loadProfile()
         loadSecuritySettings()
+        refreshAccessRequestSettings()
         updateSettings {
             it.copy(
                 visible = true,
                 feedbackMessage = null,
-                errorMessage = null,
-                currentPassword = "",
-                newPassword = "",
-                confirmPassword = ""
+                errorMessage = null
             )
+        }
+    }
+
+    private fun isPrimaryMeetingName(name: String): Boolean {
+        val n = name.trim()
+        return n == "한우리" || n.startsWith("한우리(")
+    }
+
+    private fun resolvePrimaryMeetingDoc(): MeetingDoc? {
+        return allMeetings.firstOrNull { isPrimaryMeetingName(it.name) }
+            ?: joinedMeetings.firstOrNull { isPrimaryMeetingName(it.name) }
+            ?: allMeetings.firstOrNull()
+    }
+
+    private fun refreshAccessRequestSettings() {
+        val session = authRepository.currentSession()
+        val uid = session?.uid
+        val primary = resolvePrimaryMeetingDoc()
+        val request = primary?.id?.let { myJoinRequests[it] }
+        val hasAccess = primary != null && uid != null && (
+            isElevatedAccount(uid, session?.email) ||
+                primary.ownerUid == uid ||
+                primary.adminUid == uid ||
+                primary.sharedWith.contains(uid) ||
+                joinedMeetings.any { it.id == primary.id }
+            )
+        val status = when {
+            hasAccess -> "APPROVED"
+            request?.status == JoinRequestStatus.PENDING -> "PENDING"
+            request?.status == JoinRequestStatus.REJECTED -> "REJECTED"
+            else -> null
+        }
+        updateSettings {
+            it.copy(
+                primaryMeetingId = primary?.id,
+                primaryMeetingName = primary?.name?.ifBlank { "한우리" } ?: "한우리",
+                accessRequestStatus = status,
+                canRequestAccess = !hasAccess &&
+                    primary != null &&
+                    !isElevatedAccount(uid, session?.email) &&
+                    status != "PENDING"
+            )
+        }
+    }
+
+    /** 설정 → 한우리 승인 요청 */
+    fun requestAccessFromSettings() {
+        val meetingId = _uiState.value.settings.primaryMeetingId ?: return
+        if (_uiState.value.isSubmitting || _uiState.value.settings.isRequestingAccess) return
+        runBusy {
+            updateSettings { it.copy(isRequestingAccess = true, errorMessage = null) }
+            try {
+                joinRequestRepository.submitJoinRequest(meetingId, "")
+                val uid = authRepository.currentSession()?.uid
+                if (!uid.isNullOrBlank()) {
+                    joinRequestRepository.getMyJoinRequest(meetingId, uid)?.let { request ->
+                        myJoinRequests = myJoinRequests + (meetingId to request)
+                    }
+                }
+                rebuildLists()
+                refreshAccessRequestSettings()
+                updateSettings {
+                    it.copy(
+                        isRequestingAccess = false,
+                        feedbackMessage = "승인 요청을 보냈습니다. 관리자 승인 후 새로고침하세요."
+                    )
+                }
+            } catch (error: Throwable) {
+                updateSettings {
+                    it.copy(
+                        isRequestingAccess = false,
+                        errorMessage = error.message ?: "승인 요청에 실패했습니다."
+                    )
+                }
+            }
         }
     }
 
@@ -642,10 +728,7 @@ class MeetingHubViewModel @Inject constructor(
             it.copy(
                 visible = false,
                 feedbackMessage = null,
-                errorMessage = null,
-                currentPassword = "",
-                newPassword = "",
-                confirmPassword = ""
+                errorMessage = null
             )
         }
     }
@@ -655,15 +738,6 @@ class MeetingHubViewModel @Inject constructor(
 
     fun updateProfilePhone(value: String) =
         updateSettings { it.copy(phone = value, errorMessage = null, feedbackMessage = null) }
-
-    fun updateCurrentPassword(value: String) =
-        updateSettings { it.copy(currentPassword = value, errorMessage = null, feedbackMessage = null) }
-
-    fun updateNewPassword(value: String) =
-        updateSettings { it.copy(newPassword = value, errorMessage = null, feedbackMessage = null) }
-
-    fun updateConfirmPassword(value: String) =
-        updateSettings { it.copy(confirmPassword = value, errorMessage = null, feedbackMessage = null) }
 
     fun saveProfile() {
         val settings = _uiState.value.settings
@@ -677,30 +751,6 @@ class MeetingHubViewModel @Inject constructor(
                 showSettingsSuccess("회원 정보를 저장했습니다.")
             } catch (error: Throwable) {
                 showSettingsError(error.message ?: "회원 정보 저장에 실패했습니다.")
-            }
-        }
-    }
-
-    fun changePassword() {
-        val settings = _uiState.value.settings
-        if (_uiState.value.isSubmitting || !settings.canChangePassword) return
-        runBusy {
-            try {
-                authRepository.changePassword(
-                    currentPassword = settings.currentPassword,
-                    newPassword = settings.newPassword,
-                    confirmPassword = settings.confirmPassword
-                )
-                updateSettings {
-                    it.copy(
-                        currentPassword = "",
-                        newPassword = "",
-                        confirmPassword = ""
-                    )
-                }
-                showSettingsSuccess("비밀번호를 변경했습니다.")
-            } catch (error: Throwable) {
-                showSettingsError(error.toEmailAuthErrorMessage())
             }
         }
     }
@@ -873,6 +923,28 @@ class MeetingHubViewModel @Inject constructor(
         _uiState.update { it.copy(showApprovalSheet = false) }
     }
 
+    /**
+     * 미승인(개설자·지정 운영관리자·sharedWith 아님) 상태에서 모임 허브를 나갈 때 호출합니다.
+     * 클라우드/한우리 실데이터로는 절대 진입하지 않고, 로컬 전용 "체험 샘플" 모임(clubId)으로
+     * 전환한 뒤 화면을 넘깁니다. 웹의 SAMPLE_* 와 동일하게 소량 가짜 데이터만 노출됩니다.
+     */
+    fun enterSampleMode(onEntered: () -> Unit) {
+        if (_uiState.value.isSubmitting) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSubmitting = true, isAutoEntering = true) }
+            try {
+                val sampleClubId = sampleClubSeeder.ensureSampleClubReady()
+                selectedClubRepository.setSelectedClubId(sampleClubId)
+                onEntered()
+                // 성공 시 isAutoEntering 유지 — 허브 목록 flash 방지. onHubVisible에서 리셋.
+                _uiState.update { it.copy(isSubmitting = false) }
+            } catch (error: Throwable) {
+                showSnackbar(error.message ?: "샘플 데이터를 불러오지 못했습니다.")
+                _uiState.update { it.copy(isSubmitting = false, isAutoEntering = false) }
+            }
+        }
+    }
+
     fun enterMeeting(meeting: MeetingDoc, onEntered: () -> Unit) {
         if (_uiState.value.isSubmitting) return
         viewModelScope.launch {
@@ -881,35 +953,21 @@ class MeetingHubViewModel @Inject constructor(
                 when (val decision = memberLoginPolicy.evaluateEnterMeeting(session, meeting)) {
                     is MemberAccessDecision.Denied -> {
                         showSnackbar(decision.message)
+                        _uiState.update { it.copy(isAutoEntering = false, isSubmitting = false) }
                         return@launch
                     }
                     MemberAccessDecision.Allowed -> Unit
                 }
             }
-            val uid = session?.uid
-            val resolved = resolvedMeeting(meeting)
-            if (isAwaitingMemberProfile(resolved, uid, myJoinRequests[meeting.id])) {
-                openMemberProfilePrompt(meeting, enterAfterSave = true)
-                return@launch
-            }
-            val elevated = isElevatedAccount(session?.uid, session?.email)
-            val needsRoster = !elevated &&
-                uid != null &&
-                meeting.ownerUid != uid &&
-                meeting.adminUid != uid &&
-                (resolved.sharedWith.contains(uid) || joinedMeetings.any { it.id == meeting.id }) &&
-                !meetingMemberEnrollmentRepository.hasSelfMemberRecord(meeting.id)
-            if (needsRoster) {
-                openMemberProfilePrompt(meeting, enterAfterSave = true)
-                return@launch
-            }
-            _uiState.update { it.copy(isSubmitting = true) }
+            // 승인 후 가입정보 입력 단계 제거 — 바로 입장
+            _uiState.update { it.copy(isSubmitting = true, isAutoEntering = true) }
             try {
                 enterMeetingInternal(meeting, onEntered)
+                // 성공 시 isAutoEntering 유지 — 허브로 다시 올 때 onHubVisible이 리셋
+                _uiState.update { it.copy(isSubmitting = false) }
             } catch (error: Throwable) {
                 showSnackbar(error.message ?: "모임 입장에 실패했습니다.")
-            } finally {
-                _uiState.update { it.copy(isSubmitting = false) }
+                _uiState.update { it.copy(isSubmitting = false, isAutoEntering = false) }
             }
         }
     }
@@ -944,7 +1002,7 @@ class MeetingHubViewModel @Inject constructor(
             try {
                 joinRequestRepository.approveJoinRequest(meetingId, requestId)
                 refreshPendingApprovals()
-                showSnackbar("가입을 승인했습니다. 회원에게 정보 입력을 요청했습니다.")
+                showSnackbar("가입을 승인했습니다. 이제 일반 회원으로 바로 이용할 수 있습니다.")
             } catch (error: Throwable) {
                 showSnackbar(error.message ?: "승인에 실패했습니다.")
             }
@@ -1121,8 +1179,7 @@ class MeetingHubViewModel @Inject constructor(
                     email = email,
                     displayName = displayName,
                     phone = profile?.phone.orEmpty(),
-                    userRole = role,
-                    canChangePassword = !PrivilegedAuthConfig.isPrivilegedEmail(email)
+                    userRole = role
                 )
             }
             _uiState.update { it.copy(userRole = role) }
@@ -1206,7 +1263,8 @@ class MeetingHubViewModel @Inject constructor(
             val rosterActive = allMeetings.filter { meeting ->
                 myMemberStatuses[meeting.id] == MemberStatus.ACTIVE
             }
-            (joinedMeetings + requested + restrictedForMine + rosterRestricted + rosterActive)
+            val primaryOnly = listOfNotNull(resolvePrimaryMeetingDoc())
+            (joinedMeetings + requested + restrictedForMine + rosterRestricted + rosterActive + primaryOnly)
                 .distinctBy { it.id }
         }
         val query = _uiState.value.searchQuery.trim()
@@ -1222,16 +1280,57 @@ class MeetingHubViewModel @Inject constructor(
             }
 
         val role = UserRole.resolve(uid = uid, email = session?.email, meeting = null)
+        val myItems = mySource.map { meeting -> toHubItem(meeting, uid, elevated, session?.email) }
+        // 일반 회원: 한우리(단일)만 허브에 표시
+        val displayMine = if (elevated) {
+            myItems
+        } else {
+            val primary = myItems.filter { isPrimaryMeetingName(it.meeting.name) }
+            if (primary.isNotEmpty()) primary else myItems.take(1)
+        }
+        // 일반·시스템관리자 모두 한우리(또는 단일 모임)로 바로 입장 — 허브 목록을 거치지 않음
+        val preferred = displayMine.firstOrNull {
+            isPrimaryMeetingName(it.meeting.name)
+        } ?: displayMine.firstOrNull()
+        val current = _uiState.value
+        val waitingForMeetings = session != null && preferred == null && (
+            elevated || current.isLoading
+            )
+        val autoEnter = if (
+            preferred != null &&
+            !didOfferAutoEnter &&
+            !current.isAutoEntering &&
+            !current.isSubmitting &&
+            current.autoEnterCandidate == null
+        ) {
+            didOfferAutoEnter = true
+            preferred
+        } else {
+            null
+        }
+        val keepEntering = preferred != null && (
+            autoEnter != null ||
+                current.autoEnterCandidate != null ||
+                current.isAutoEntering ||
+                current.isSubmitting
+            )
         _uiState.update {
             it.copy(
-                isLoading = false,
+                isLoading = waitingForMeetings && !keepEntering,
                 isElevated = elevated,
                 userRole = role,
                 canReviewJoins = canReviewJoins,
-                myMeetings = mySource.map { meeting -> toHubItem(meeting, uid, elevated, session?.email) },
-                searchableMeetings = searchable
+                myMeetings = displayMine,
+                searchableMeetings = emptyList(),
+                autoEnterCandidate = autoEnter ?: it.autoEnterCandidate,
+                isAutoEntering = keepEntering || autoEnter != null || it.isAutoEntering
             )
         }
+        refreshAccessRequestSettings()
+    }
+
+    fun consumeAutoEnter() {
+        _uiState.update { it.copy(autoEnterCandidate = null) }
     }
 
     private fun toHubItem(
@@ -1250,12 +1349,9 @@ class MeetingHubViewModel @Inject constructor(
             resolved.ownerUid == uid -> MeetingAccessStatus.OWNER
             uid != null && resolved.adminUid.isNotBlank() && resolved.adminUid == uid ->
                 MeetingAccessStatus.TREASURER
-            awaitingProfile -> MeetingAccessStatus.JOINED
+            // 클라우드 소속(sharedWith)만 실데이터 입장. 로컬 시드 명단 매칭으로 JOINED 처리하지 않음.
+            uid != null && resolved.sharedWith.contains(uid) -> MeetingAccessStatus.JOINED
             restriction != null -> restriction
-            uid != null && (
-                resolved.sharedWith.contains(uid) || resolved.id in joinedIds
-                ) -> MeetingAccessStatus.JOINED
-            myMemberStatuses[resolved.id] == MemberStatus.ACTIVE -> MeetingAccessStatus.JOINED
             request?.status == JoinRequestStatus.PENDING -> MeetingAccessStatus.PENDING
             request?.status == JoinRequestStatus.REJECTED -> MeetingAccessStatus.REJECTED
             request?.status == JoinRequestStatus.WITHDRAWN -> MeetingAccessStatus.AVAILABLE
@@ -1289,35 +1385,14 @@ class MeetingHubViewModel @Inject constructor(
     }
 
     /**
-     * 가입 승인 후 회원정보 폼을 아직 제출하지 않은 상태.
-     * 요청 문서가 늦게 오거나 승인대기로 남아 있어도, 이미 모임에 들어가 있으면
-     * 일반회원이 아니라 「회원정보 입력」으로 본다.
+     * 승인 후 가입정보 입력은 더 이상 요구하지 않음 — 즉시 일반 회원.
      */
     private fun isAwaitingMemberProfile(
         meeting: MeetingDoc,
         uid: String?,
         request: JoinRequestDoc?
     ): Boolean {
-        if (uid.isNullOrBlank()) return false
-        if (_uiState.value.isElevated) return false
-        if (meeting.ownerUid == uid) return false
-        if (meeting.adminUid.isNotBlank() && meeting.adminUid == uid) return false
-        if (meeting.id in selfEnrolledMeetingIds) return false
-        val roster = myMemberStatuses[meeting.id]
-        if (roster == MemberStatus.DORMANT || roster == MemberStatus.WITHDRAWN) return false
-        if (request?.status == JoinRequestStatus.REJECTED) return false
-        if (request?.needsMemberProfile() == true) return true
-        val hasRegularAccess = meeting.sharedWith.contains(uid) ||
-            joinedMeetings.any { it.id == meeting.id }
-        if (!hasRegularAccess) return false
-        if (meeting.id in selfEnrolledMeetingIds) return false
-        if (request?.status == JoinRequestStatus.APPROVED) return true
-        if (request?.status == JoinRequestStatus.PENDING ||
-            request?.status == JoinRequestStatus.WITHDRAWN
-        ) {
-            return true
-        }
-        return roster != MemberStatus.ACTIVE
+        return false
     }
 
     private suspend fun refreshMyMemberStatuses() {

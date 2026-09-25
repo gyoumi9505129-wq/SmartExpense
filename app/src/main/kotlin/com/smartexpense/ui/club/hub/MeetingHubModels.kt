@@ -59,14 +59,16 @@ data class HubSettingsState(
     val displayName: String = "",
     val phone: String = "",
     val userRole: UserRole = UserRole.MEMBER,
-    val canChangePassword: Boolean = true,
-    val currentPassword: String = "",
-    val newPassword: String = "",
-    val confirmPassword: String = "",
     val feedbackMessage: String? = null,
     val errorMessage: String? = null,
     val showLogoutConfirm: Boolean = false,
     val isLoggingOut: Boolean = false,
+    /** 한우리 승인 요청 (미승인 일반 회원용) */
+    val primaryMeetingId: String? = null,
+    val primaryMeetingName: String = "한우리",
+    val accessRequestStatus: String? = null,
+    val canRequestAccess: Boolean = false,
+    val isRequestingAccess: Boolean = false,
     // 보안 설정 (로그인 방식 · 생체 인증) — 설정에서만 등록, 잠금 화면 없음
     val unlockMethod: AppLockUnlockMethod = AppLockUnlockMethod.PIN,
     val isBiometricEnabled: Boolean = false,
@@ -86,7 +88,7 @@ data class HubSettingsState(
     val patternSetupError: String? = null
 )
 
-data class MeetingHubUiState(
+    data class MeetingHubUiState(
     val selectedTab: MeetingHubTab = MeetingHubTab.MY,
     val searchQuery: String = "",
     val isLoading: Boolean = true,
@@ -109,42 +111,32 @@ data class MeetingHubUiState(
     val dialogErrorMessage: String? = null,
     val settings: HubSettingsState = HubSettingsState(),
     val snackbarMessage: String? = null,
-    val memberProfilePrompt: MemberProfilePromptState? = null
+    val memberProfilePrompt: MemberProfilePromptState? = null,
+    /** 로그인 직후 한우리/샘플로 1회 자동 입장 */
+    val autoEnterCandidate: MeetingHubItem? = null,
+    /**
+     * autoEnterCandidate가 소비된 뒤에도 enterSampleMode/enterMeeting의 비동기 작업이
+     * 끝나 실제 화면 전환(onEntered)이 이뤄지기 전까지 true로 유지됩니다.
+     * 이 값이 true인 동안은 모임 목록을 그리지 않아, 로그인 직후 목록이
+     * 잠깐 보였다가 사라지는 깜빡임(flash)을 막습니다.
+     */
+    val isAutoEntering: Boolean = false
 ) {
     val visibleTabs: List<MeetingHubTab>
-        get() = buildList {
-            add(MeetingHubTab.MY)
-            if (isElevated) {
-                add(MeetingHubTab.APPROVALS)
-            } else {
-                add(MeetingHubTab.SEARCH)
-                if (canReviewJoins) add(MeetingHubTab.APPROVALS)
-            }
-            add(MeetingHubTab.CREATE)
-        }
+        // 허브에서 검색·가입대기·만들기 탭 제거. 가입 승인은 모임 안 「관리」 탭에서 처리.
+        get() = listOf(MeetingHubTab.MY)
 
     val pendingProfileMeetings: List<MeetingHubItem>
-        get() = myMeetings.filter { it.needsMemberProfile }
+        get() = emptyList()
 
     fun tabLabel(tab: MeetingHubTab): String = when (tab) {
         MeetingHubTab.MY -> if (isElevated) "전체 모임" else "내 모임"
         MeetingHubTab.SEARCH -> "모임 찾기"
-        MeetingHubTab.APPROVALS -> {
-            val count = pendingApprovals.size
-            if (count > 0) "가입 대기($count)" else "가입 대기"
-        }
+        MeetingHubTab.APPROVALS -> "가입 대기"
         MeetingHubTab.CREATE -> "만들기"
     }
 
-    fun filteredMyMeetings(): List<MeetingHubItem> {
-        if (!isElevated) return myMeetings
-        val query = searchQuery.trim()
-        if (query.isBlank()) return myMeetings
-        return myMeetings.filter { item ->
-            item.meeting.name.contains(query, ignoreCase = true) ||
-                item.meeting.description.contains(query, ignoreCase = true)
-        }
-    }
+    fun filteredMyMeetings(): List<MeetingHubItem> = myMeetings
 }
 
 internal fun isElevatedAccount(uid: String?, email: String?): Boolean =

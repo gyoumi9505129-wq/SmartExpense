@@ -1,4 +1,4 @@
-package com.smartexpense.ui.settings
+﻿package com.smartexpense.ui.settings
 
 import android.content.Context
 import android.content.Intent
@@ -20,6 +20,8 @@ import com.smartexpense.data.firebase.CloudSyncMode
 import com.smartexpense.data.firebase.MeetingRoleRepository
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
+import com.smartexpense.data.firebase.firestore.JoinRequestFirestoreRepository
+import com.smartexpense.data.firebase.firestore.JoinRequestStatus
 import com.smartexpense.data.firebase.firestore.MeetingFirestoreRepository
 import com.smartexpense.data.firebase.firestore.MeetingInviteResult
 import com.smartexpense.data.firebase.firestore.UserProfileFirestoreRepository
@@ -69,6 +71,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -91,6 +94,7 @@ class SettingsViewModel @Inject constructor(
     private val meetingRoleRepository: MeetingRoleRepository,
     private val selectedMeetingRepository: SelectedMeetingRepository,
     private val meetingFirestoreRepository: MeetingFirestoreRepository,
+    private val joinRequestFirestoreRepository: JoinRequestFirestoreRepository,
     private val userProfileFirestoreRepository: UserProfileFirestoreRepository,
     private val cloudDataMigrationRepository: CloudDataMigrationRepository,
     private val seedDataRepository: SeedDataRepository,
@@ -127,10 +131,15 @@ class SettingsViewModel @Inject constructor(
         (2011..current).toList().asReversed()
     }
 
+    /** 「가입 계정」 목록이 조회된 모임 ID (강퇴/중복정리 대상 지정용) */
+    private var accountsMeetingId: String? = null
+
     init {
         observeClubScopedSettings()
         observeFirebaseAuth()
         observeMeetingOwnerRole()
+        observeAccessRequestState()
+        observeAccountsManagement()
         refreshNotificationAccess()
         bindScreenRefreshSignals(ledgerRefreshNotifier, refreshTrigger, authRefreshGuard)
         _uiState.update {
@@ -138,6 +147,143 @@ class SettingsViewModel @Inject constructor(
                 exportYear = LocalDate.now().year,
                 exportYearOptions = exportYearOptions
             )
+        }
+    }
+
+    private fun isPrimaryMeetingName(name: String): Boolean {
+        val n = name.trim()
+        return n == ClubConstants.HANURI_SEED_CLUB_NAME ||
+            n.startsWith("${ClubConstants.HANURI_SEED_CLUB_NAME}(")
+    }
+
+    private fun observeAccessRequestState() {
+        viewModelScope.launch {
+            combine(
+                firebaseAuthRepository.authState.catch { emit(null) },
+                selectedMeetingRepository.selectedMeetingId.catch { emit(null) },
+                meetingRoleRepository.canEdit.catch { emit(false) },
+                meetingRoleRepository.isMeetingOwner.catch { emit(false) },
+                meetingRoleRepository.isSystemAdmin.catch { emit(false) }
+            ) { session, meetingId, canEdit, isOwner, isAdmin ->
+                AccessObserveKey(
+                    uid = session?.uid,
+                    email = session?.email,
+                    meetingId = meetingId,
+                    canEdit = canEdit,
+                    isOwner = isOwner,
+                    isAdmin = isAdmin
+                )
+            }.collect { key ->
+                refreshAccessRequestUi(key)
+            }
+        }
+    }
+
+    private data class AccessObserveKey(
+        val uid: String?,
+        val email: String?,
+        val meetingId: String?,
+        val canEdit: Boolean,
+        val isOwner: Boolean,
+        val isAdmin: Boolean
+    )
+
+    private suspend fun refreshAccessRequestUi(key: AccessObserveKey) {
+        val uid = key.uid
+        if (uid.isNullOrBlank() || key.isAdmin || key.isOwner || key.canEdit) {
+            _uiState.update {
+                it.copy(
+                    canRequestAccess = false,
+                    accessRequestStatus = if (key.isAdmin || key.isOwner || key.canEdit) "APPROVED" else null,
+                    accessRequestMeetingId = null
+                )
+            }
+            return
+        }
+        val primary = resolvePrimaryCloudMeeting()
+        if (primary == null) {
+            _uiState.update {
+                it.copy(
+                    canRequestAccess = false,
+                    accessRequestStatus = null,
+                    accessRequestMeetingId = null
+                )
+            }
+            return
+        }
+        val hasAccess = primary.ownerUid == uid ||
+            primary.adminUid == uid ||
+            primary.sharedWith.contains(uid)
+        if (hasAccess) {
+            _uiState.update {
+                it.copy(
+                    canRequestAccess = false,
+                    accessRequestStatus = "APPROVED",
+                    accessRequestMeetingId = primary.id,
+                    accessRequestMeetingName = primary.name.ifBlank { "한우리" }
+                )
+            }
+            return
+        }
+        val request = runCatching {
+            joinRequestFirestoreRepository.getMyJoinRequest(primary.id, uid)
+        }.getOrNull()
+        val statusEnum = request?.status
+        _uiState.update {
+            it.copy(
+                canRequestAccess = statusEnum != JoinRequestStatus.PENDING &&
+                    statusEnum != JoinRequestStatus.APPROVED,
+                accessRequestStatus = statusEnum?.name,
+                accessRequestMeetingId = primary.id,
+                accessRequestMeetingName = primary.name.ifBlank { "한우리" }
+            )
+        }
+    }
+
+    private suspend fun resolvePrimaryCloudMeeting() =
+        runCatching {
+            val selectedId = selectedMeetingRepository.selectedMeetingId.first()
+            if (!selectedId.isNullOrBlank()) {
+                meetingFirestoreRepository.getMeeting(selectedId)?.let { return@runCatching it }
+            }
+            val directory = meetingFirestoreRepository.getSearchableMeetingsOnce(fromServer = false)
+            directory.firstOrNull { isPrimaryMeetingName(it.name) }
+                ?: directory.firstOrNull()
+                ?: meetingFirestoreRepository.getAllMeetingsOnce(fromServer = false)
+                    .firstOrNull { isPrimaryMeetingName(it.name) }
+        }.getOrNull()
+
+    /** 모임 설정 → 한우리 승인 요청 */
+    fun requestMeetingAccess() {
+        if (_uiState.value.isRequestingAccess) return
+        val meetingId = _uiState.value.accessRequestMeetingId
+        if (meetingId.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(snackbarMessage = "승인할 모임을 찾을 수 없습니다. 새로고침 후 다시 시도해 주세요.")
+            }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRequestingAccess = true) }
+            runCatching {
+                joinRequestFirestoreRepository.submitJoinRequest(meetingId, "")
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isRequestingAccess = false,
+                        canRequestAccess = false,
+                        accessRequestStatus = JoinRequestStatus.PENDING.name,
+                        snackbarMessage = "승인 요청을 보냈습니다. 관리자 승인 후 새로고침하세요."
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isRequestingAccess = false,
+                        snackbarMessage = error.message ?: "승인 요청에 실패했습니다."
+                    )
+                }
+            }
         }
     }
 
@@ -234,6 +380,261 @@ class SettingsViewModel @Inject constructor(
         if (!authRefreshGuard.shouldAllowDataRefresh()) return
         refreshNotificationAccess()
         refreshTrigger.refresh()
+        if (_uiState.value.isSystemAdmin) {
+            refreshAccounts()
+        }
+    }
+
+    /** 시스템관리자 + 선택 모임이 바뀔 때 「승인 대기·가입 계정」 목록을 불러옵니다. */
+    private fun observeAccountsManagement() {
+        viewModelScope.launch {
+            combine(
+                meetingRoleRepository.isSystemAdmin.catch { emit(false) },
+                selectedMeetingRepository.selectedMeetingId.catch { emit(null) }
+            ) { isAdmin, meetingId -> isAdmin to meetingId }
+                .distinctUntilChanged()
+                .collect { (isAdmin, meetingId) ->
+                    if (isAdmin && !meetingId.isNullOrBlank()) {
+                        refreshAccounts()
+                    } else {
+                        accountsMeetingId = null
+                        _uiState.update {
+                            it.copy(
+                                accountRows = emptyList(),
+                                pendingJoinRequests = emptyList(),
+                                accountsError = null
+                            )
+                        }
+                    }
+                }
+        }
+    }
+
+    /** 「가입 계정」·「승인 대기」 목록을 새로고침합니다. 시스템관리자 전용. */
+    fun refreshAccounts() {
+        if (!_uiState.value.isSystemAdmin) return
+        if (_uiState.value.isLoadingAccounts) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccounts = true, accountsError = null) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val meetingId = selectedMeetingRepository.requireSelectedMeetingId()
+                    val meeting = meetingFirestoreRepository.getMeeting(meetingId)
+                        ?: throw IllegalStateException("모임을 찾을 수 없습니다.")
+                    val profiles = userProfileFirestoreRepository.getAllProfiles()
+                    val pending = joinRequestFirestoreRepository.getPendingJoinRequestsOnce(meetingId)
+                    Triple(meetingId, meeting to profiles, pending)
+                }
+            }.onSuccess { (meetingId, meetingAndProfiles, pending) ->
+                val (meeting, profiles) = meetingAndProfiles
+                accountsMeetingId = meetingId
+                val sharedSet = meeting.sharedWith.toSet()
+                val treasurerUid = meeting.adminUid
+                val emailCounts = profiles
+                    .map { it.email.trim().lowercase() }
+                    .filter { it.isNotBlank() }
+                    .groupingBy { it }
+                    .eachCount()
+                val rows = profiles
+                    .filter { p ->
+                        sharedSet.contains(p.uid) || p.uid == meeting.ownerUid ||
+                            (treasurerUid.isNotBlank() && p.uid == treasurerUid)
+                    }
+                    .map { p ->
+                        val email = p.email.trim().lowercase()
+                        AccountRowUiModel(
+                            uid = p.uid,
+                            displayName = p.displayName,
+                            email = p.email,
+                            isOwner = p.uid == meeting.ownerUid,
+                            isTreasurer = treasurerUid.isNotBlank() && p.uid == treasurerUid,
+                            isDuplicateEmail = email.isNotBlank() && (emailCounts[email] ?: 0) > 1
+                        )
+                    }
+                    .sortedBy { it.label }
+                val pendingRows = pending.map { req ->
+                    PendingJoinRequestUiModel(
+                        meetingId = meetingId,
+                        requestId = req.id,
+                        displayName = req.displayName,
+                        email = req.email,
+                        message = req.message
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        isLoadingAccounts = false,
+                        accountRows = rows,
+                        pendingJoinRequests = pendingRows,
+                        accountsError = null
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isLoadingAccounts = false,
+                        accountsError = error.message ?: "계정 목록을 불러오지 못했습니다."
+                    )
+                }
+            }
+        }
+    }
+
+    fun approvePendingJoinRequest(meetingId: String, requestId: String) {
+        if (!_uiState.value.isSystemAdmin || _uiState.value.isDecidingJoinRequest) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDecidingJoinRequest = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    joinRequestFirestoreRepository.approveJoinRequest(meetingId, requestId)
+                }
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isDecidingJoinRequest = false,
+                        isLoadingAccounts = false,
+                        snackbarMessage = "가입을 승인했습니다."
+                    )
+                }
+                refreshAccounts()
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isDecidingJoinRequest = false,
+                        snackbarMessage = error.message ?: "승인에 실패했습니다."
+                    )
+                }
+            }
+        }
+    }
+
+    fun rejectPendingJoinRequest(meetingId: String, requestId: String) {
+        if (!_uiState.value.isSystemAdmin || _uiState.value.isDecidingJoinRequest) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDecidingJoinRequest = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    joinRequestFirestoreRepository.rejectJoinRequest(meetingId, requestId)
+                }
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isDecidingJoinRequest = false,
+                        isLoadingAccounts = false,
+                        snackbarMessage = "가입 요청을 거절했습니다."
+                    )
+                }
+                refreshAccounts()
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isDecidingJoinRequest = false,
+                        snackbarMessage = error.message ?: "거절에 실패했습니다."
+                    )
+                }
+            }
+        }
+    }
+
+    /** 강퇴/삭제 확인창을 엽니다. 개설자 계정은 애초에 목록에서 버튼이 노출되지 않습니다. */
+    fun requestPurgeAccount(uid: String, label: String) {
+        if (_uiState.value.isPurgingAccount) return
+        _uiState.update {
+            it.copy(showPurgeAccountDialog = true, purgeTargetUid = uid, purgeTargetLabel = label)
+        }
+    }
+
+    fun dismissPurgeAccountDialog() {
+        if (_uiState.value.isPurgingAccount) return
+        _uiState.update {
+            it.copy(showPurgeAccountDialog = false, purgeTargetUid = null, purgeTargetLabel = "")
+        }
+    }
+
+    /** 강퇴/삭제 — 웹 purgeMeetingAccount 대응. sharedWith/가입요청/명단연결/프로필을 모두 정리합니다. */
+    fun confirmPurgeAccount() {
+        val uid = _uiState.value.purgeTargetUid ?: return
+        val label = _uiState.value.purgeTargetLabel.ifBlank { uid }
+        val meetingId = accountsMeetingId ?: return
+        if (_uiState.value.isPurgingAccount) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPurgingAccount = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    joinRequestFirestoreRepository.purgeMeetingAccount(meetingId, uid)
+                }
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        isPurgingAccount = false,
+                        showPurgeAccountDialog = false,
+                        purgeTargetUid = null,
+                        purgeTargetLabel = "",
+                        snackbarMessage = "${label} 계정을 삭제했습니다."
+                    )
+                }
+                refreshAccounts()
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isPurgingAccount = false,
+                        snackbarMessage = error.message ?: "계정 삭제에 실패했습니다."
+                    )
+                }
+            }
+        }
+    }
+
+    /** 같은 이메일 중복 UID 정리 확인창을 엽니다. */
+    fun requestKeepOnlyUid(uid: String, label: String) {
+        if (_uiState.value.isCleaningDuplicateAccounts) return
+        _uiState.update {
+            it.copy(
+                showKeepOnlyUidDialog = true,
+                keepOnlyUidTarget = uid,
+                keepOnlyUidTargetLabel = label
+            )
+        }
+    }
+
+    fun dismissKeepOnlyUidDialog() {
+        if (_uiState.value.isCleaningDuplicateAccounts) return
+        _uiState.update {
+            it.copy(showKeepOnlyUidDialog = false, keepOnlyUidTarget = null, keepOnlyUidTargetLabel = "")
+        }
+    }
+
+    /** 이 UID만 남기기 — 웹 cleanupDuplicateAccountsByKeepUid 대응. */
+    fun confirmKeepOnlyUid() {
+        val keepUid = _uiState.value.keepOnlyUidTarget ?: return
+        val meetingId = accountsMeetingId ?: return
+        if (_uiState.value.isCleaningDuplicateAccounts) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCleaningDuplicateAccounts = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    joinRequestFirestoreRepository.cleanupDuplicateAccountsByKeepUid(meetingId, keepUid)
+                }
+            }.onSuccess { result ->
+                _uiState.update {
+                    it.copy(
+                        isCleaningDuplicateAccounts = false,
+                        showKeepOnlyUidDialog = false,
+                        keepOnlyUidTarget = null,
+                        keepOnlyUidTargetLabel = "",
+                        snackbarMessage = "${result.email} → UID 1개만 유지 (삭제 ${result.removedUids.size}건)"
+                    )
+                }
+                refreshAccounts()
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isCleaningDuplicateAccounts = false,
+                        snackbarMessage = error.message ?: "중복 정리에 실패했습니다."
+                    )
+                }
+            }
+        }
     }
 
     private fun observeClubScopedSettings() {
@@ -1204,13 +1605,13 @@ class SettingsViewModel @Inject constructor(
     fun openDesignateTreasurerDialog() {
         if (!_uiState.value.isMeetingOwner && !_uiState.value.isSystemAdmin) {
             _uiState.update {
-                it.copy(snackbarMessage = "운영관리자 지정은 모임을 만든 관리자만 할 수 있습니다.")
+                it.copy(snackbarMessage = "총무 지정은 모임을 만든 관리자만 할 수 있습니다.")
             }
             return
         }
         if (!_uiState.value.isFirebaseSignedIn) {
             _uiState.update {
-                it.copy(snackbarMessage = "운영관리자 지정은 구글 로그인 후 사용할 수 있습니다.")
+                it.copy(snackbarMessage = "총무 지정은 구글 로그인 후 사용할 수 있습니다.")
             }
             return
         }
@@ -1284,7 +1685,7 @@ class SettingsViewModel @Inject constructor(
                         designateTreasurerInput = "",
                         designateTreasurerError = null,
                         designatedTreasurerUid = treasurerUid,
-                        snackbarMessage = "운영관리자를 설정했습니다. (UID: ${treasurerUid.take(8)}…)"
+                        snackbarMessage = "총무를 설정했습니다. (UID: ${treasurerUid.take(8)}…)"
                     )
                 }
             }.onFailure { error ->
@@ -1292,7 +1693,7 @@ class SettingsViewModel @Inject constructor(
                     it.copy(
                         isDesignatingTreasurer = false,
                         designateTreasurerError = error.message
-                            ?: "운영관리자 지정에 실패했습니다. 잠시 후 다시 시도해 주세요."
+                            ?: "총무 지정에 실패했습니다. 잠시 후 다시 시도해 주세요."
                     )
                 }
             }
@@ -1302,7 +1703,7 @@ class SettingsViewModel @Inject constructor(
     fun clearDesignatedTreasurer() {
         if (!_uiState.value.isMeetingOwner && !_uiState.value.isSystemAdmin) {
             _uiState.update {
-                it.copy(snackbarMessage = "운영관리자 지정 해제는 모임을 만든 관리자만 할 수 있습니다.")
+                it.copy(snackbarMessage = "총무 지정 해제는 모임을 만든 관리자만 할 수 있습니다.")
             }
             return
         }
@@ -1316,13 +1717,13 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         designatedTreasurerUid = null,
-                        snackbarMessage = "운영관리자 지정을 해제했습니다."
+                        snackbarMessage = "총무 지정을 해제했습니다."
                     )
                 }
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
-                        snackbarMessage = error.message ?: "운영관리자 지정 해제에 실패했습니다."
+                        snackbarMessage = error.message ?: "총무 지정 해제에 실패했습니다."
                     )
                 }
             }
@@ -1728,7 +2129,7 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(snackbarMessage = "시스템관리자만 사용할 수 있습니다.") }
     }
 
-    /** 클라우드 올리기/내리기는 모임관리자(개설자)·지정 운영관리자·시스템관리자. */
+    /** 클라우드 올리기/내리기는 모임관리자(개설자)·지정 총무·시스템관리자. */
     fun requireSyncAccess(onGranted: () -> Unit) {
         if (_uiState.value.canSync) {
             onGranted()
@@ -1737,7 +2138,7 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(snackbarMessage = "모임관리자 또는 시스템관리자만 사용할 수 있습니다.") }
     }
 
-    /** 운영관리자 지정·모임 삭제는 개설자 또는 시스템관리자. */
+    /** 총무 지정·모임 삭제는 개설자 또는 시스템관리자. */
     fun requireMeetingOwnerOps(onGranted: () -> Unit) {
         if (_uiState.value.isMeetingOwner || _uiState.value.isSystemAdmin) {
             onGranted()

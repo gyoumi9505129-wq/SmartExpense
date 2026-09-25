@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -35,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 // AppLockUnlockMethod는 HubSettingsState를 통해 전달됨
 import com.smartexpense.ui.club.components.ClubTextField
@@ -54,11 +52,8 @@ fun MeetingHubSettingsSheet(
     onDismiss: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
-    onCurrentPasswordChange: (String) -> Unit,
-    onNewPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
     onSaveProfile: () -> Unit,
-    onChangePassword: () -> Unit,
+    onRequestAccess: () -> Unit,
     onRequestLogout: () -> Unit,
     onDismissLogoutConfirm: () -> Unit,
     onConfirmLogout: () -> Unit,
@@ -86,11 +81,8 @@ fun MeetingHubSettingsSheet(
                 isSubmitting = isSubmitting,
                 onDisplayNameChange = onDisplayNameChange,
                 onPhoneChange = onPhoneChange,
-                onCurrentPasswordChange = onCurrentPasswordChange,
-                onNewPasswordChange = onNewPasswordChange,
-                onConfirmPasswordChange = onConfirmPasswordChange,
                 onSaveProfile = onSaveProfile,
-                onChangePassword = onChangePassword,
+                onRequestAccess = onRequestAccess,
                 onRequestLogout = onRequestLogout,
                 onOpenUnlockMethodDialog = onOpenUnlockMethodDialog,
                 onChangePin = onChangePin,
@@ -139,18 +131,15 @@ private fun HubSettingsContent(
     isSubmitting: Boolean,
     onDisplayNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
-    onCurrentPasswordChange: (String) -> Unit,
-    onNewPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
     onSaveProfile: () -> Unit,
-    onChangePassword: () -> Unit,
+    onRequestAccess: () -> Unit,
     onRequestLogout: () -> Unit,
     onOpenUnlockMethodDialog: () -> Unit,
     onChangePin: () -> Unit,
     onChangePattern: () -> Unit,
     onBiometricChanged: (Boolean) -> Unit
 ) {
-    val busy = isSubmitting || settings.isLoggingOut
+    val busy = isSubmitting || settings.isLoggingOut || settings.isRequestingAccess
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -166,6 +155,43 @@ private fun HubSettingsContent(
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold
         )
+
+        Text(
+            "모임 접근",
+            color = TextPrimary,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 8.dp)
+        )
+        Text(
+            when (settings.accessRequestStatus) {
+                "APPROVED" -> "「${settings.primaryMeetingName}」 이용이 승인되었습니다."
+                "PENDING" -> "「${settings.primaryMeetingName}」 승인 요청이 대기 중입니다."
+                "REJECTED" -> "이전 요청이 거절되었습니다. 다시 요청할 수 있습니다."
+                else -> "승인 전에는 샘플 데이터만 볼 수 있습니다. 실데이터를 보려면 승인 요청을 보내세요."
+            },
+            color = TextSecondary,
+            style = MaterialTheme.typography.bodySmall
+        )
+        if (settings.canRequestAccess || settings.accessRequestStatus == "PENDING") {
+            Button(
+                onClick = onRequestAccess,
+                enabled = !busy && settings.canRequestAccess,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = IncomeBlue)
+            ) {
+                Text(
+                    when {
+                        settings.isRequestingAccess -> "요청 중…"
+                        settings.accessRequestStatus == "PENDING" -> "승인 대기 중"
+                        else -> "승인 요청"
+                    },
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
         Text(
             "회원 정보",
             color = TextPrimary,
@@ -221,48 +247,7 @@ private fun HubSettingsContent(
             )
         }
 
-        Text(
-            "비밀번호",
-            color = TextPrimary,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 12.dp)
-        )
-        if (settings.canChangePassword) {
-            SettingsPasswordField(
-                value = settings.currentPassword,
-                onValueChange = onCurrentPasswordChange,
-                label = "현재 비밀번호",
-                enabled = !busy
-            )
-            SettingsPasswordField(
-                value = settings.newPassword,
-                onValueChange = onNewPasswordChange,
-                label = "새 비밀번호",
-                enabled = !busy
-            )
-            SettingsPasswordField(
-                value = settings.confirmPassword,
-                onValueChange = onConfirmPasswordChange,
-                label = "새 비밀번호 확인",
-                enabled = !busy
-            )
-            OutlinedButton(
-                onClick = onChangePassword,
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = IncomeBlue),
-                border = BorderStroke(1.dp, IncomeBlue)
-            ) {
-                Text("비밀번호 변경", color = IncomeBlue, fontWeight = FontWeight.SemiBold)
-            }
-        } else {
-            Text(
-                "시스템관리자 계정은 고정 비밀번호를 사용하며 앱에서 변경할 수 없습니다.",
-                color = TextSecondary,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
+        // Google 로그인 전용 — 앱 비밀번호 변경 UI 제거
 
         // 다음 로그인에 쓸 방식 (앱 잠금 화면 없음)
         HorizontalDivider(color = BorderLine, modifier = Modifier.padding(vertical = 4.dp))
@@ -369,32 +354,4 @@ private fun HubSettingsContent(
             )
         }
     }
-}
-
-@Composable
-private fun SettingsPasswordField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    enabled: Boolean
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text(label) },
-        singleLine = true,
-        enabled = enabled,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = TextPrimary,
-            unfocusedTextColor = TextPrimary,
-            focusedBorderColor = IncomeBlue,
-            unfocusedBorderColor = BorderLine,
-            focusedLabelColor = TextSecondary,
-            unfocusedLabelColor = TextSecondary,
-            cursorColor = TextPrimary
-        )
-    )
 }

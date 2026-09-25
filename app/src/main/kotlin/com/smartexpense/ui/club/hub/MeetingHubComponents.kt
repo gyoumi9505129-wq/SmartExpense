@@ -91,7 +91,7 @@ private fun MeetingHubCard(
         item.needsMemberProfile -> "회원정보 입력"
         item.accessStatus == MeetingAccessStatus.PENDING -> "승인 대기"
         item.accessStatus == MeetingAccessStatus.REJECTED -> "거절됨"
-        item.accessStatus == MeetingAccessStatus.AVAILABLE -> "가입 가능"
+        item.accessStatus == MeetingAccessStatus.AVAILABLE -> "샘플 · 승인 필요"
         else -> null
     }
     val statusColor = when (item.accessStatus) {
@@ -109,7 +109,11 @@ private fun MeetingHubCard(
         item.accessStatus == MeetingAccessStatus.OWNER ||
             item.accessStatus == MeetingAccessStatus.TREASURER ||
             item.accessStatus == MeetingAccessStatus.JOINED ||
-            item.accessStatus == MeetingAccessStatus.ELEVATED
+            item.accessStatus == MeetingAccessStatus.ELEVATED ||
+            // 미승인: 로컬 샘플 체험 입장
+            item.accessStatus == MeetingAccessStatus.AVAILABLE ||
+            item.accessStatus == MeetingAccessStatus.PENDING ||
+            item.accessStatus == MeetingAccessStatus.REJECTED
         )
 
     Card(
@@ -195,9 +199,17 @@ private fun MeetingHubCard(
             ) {
                 when (item.accessStatus) {
                     MeetingAccessStatus.AVAILABLE,
-                    MeetingAccessStatus.REJECTED -> {
-                        TextButton(onClick = onJoinRequest, enabled = enabled) {
-                            Text("가입 요청", color = IncomeBlue)
+                    MeetingAccessStatus.REJECTED,
+                    MeetingAccessStatus.PENDING -> {
+                        TextButton(onClick = onEnter, enabled = enabled) {
+                            Text(
+                                if (item.accessStatus == MeetingAccessStatus.PENDING) {
+                                    "샘플 열기 · 승인 대기"
+                                } else {
+                                    "샘플 열기"
+                                },
+                                color = IncomeBlue
+                            )
                         }
                     }
                     MeetingAccessStatus.SUSPENDED,
@@ -206,9 +218,6 @@ private fun MeetingHubCard(
                             text = "활동 중지",
                             color = ExpenseRed
                         )
-                    }
-                    MeetingAccessStatus.PENDING -> {
-                        Text("승인 대기 중", color = TextSecondary)
                     }
                     else -> {
                         if (item.needsMemberProfile) {

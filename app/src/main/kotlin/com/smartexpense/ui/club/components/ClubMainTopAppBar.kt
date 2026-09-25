@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,7 +35,7 @@ import com.smartexpense.ui.theme.TextSecondary
 @Composable
 fun ClubMainTopAppBar(
     onOpenSettings: () -> Unit,
-    onSwitchClub: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onSwitchClub: () -> Unit,
     modifier: Modifier = Modifier,
     additionalActions: @Composable RowScope.() -> Unit = {}
 ) {
@@ -47,15 +46,7 @@ fun ClubMainTopAppBar(
     val hasSlogan = clubSlogan.isNotBlank()
 
     CenterAlignedTopAppBar(
-        navigationIcon = {
-            IconButton(onClick = onSwitchClub) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "모임 변경",
-                    tint = TextSecondary
-                )
-            }
-        },
+        // 단일 모임(한우리) 자동 입장 — 상단 뒤로가기(모임 목록 복귀) 불필요
         title = {
             Text(
                 text = if (hasSlogan) {

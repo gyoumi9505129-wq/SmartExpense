@@ -202,30 +202,6 @@ class FirebaseAuthRepository @Inject constructor(
         )
     }
 
-    suspend fun signUpWithEmailPassword(
-        email: String,
-        password: String,
-        displayName: String,
-        phone: String
-    ): FirebaseAuthSession {
-        GmailAuthValidator.validateEmail(email)?.let { throw IllegalArgumentException(it) }
-        GmailAuthValidator.validatePassword(password)?.let { throw IllegalArgumentException(it) }
-        GmailAuthValidator.validateDisplayName(displayName)?.let { throw IllegalArgumentException(it) }
-        GmailAuthValidator.validatePhone(phone)?.let { throw IllegalArgumentException(it) }
-        val normalizedEmail = GmailAuthValidator.normalizeEmail(email)
-        val result = auth.createUserWithEmailAndPassword(normalizedEmail, password).await()
-        val user = result.user ?: throw IllegalStateException("회원가입에 실패했습니다.")
-        val session = user.toSession()
-        persistUid(session.uid)
-        userProfileFirestoreRepository.saveCompletedProfile(
-            uid = session.uid,
-            email = normalizedEmail,
-            displayName = displayName,
-            phone = phone
-        )
-        return session
-    }
-
     suspend fun saveProfileForCurrentUser(displayName: String, phone: String) {
         val user = auth.currentUser ?: throw IllegalStateException("로그인이 필요합니다.")
         GmailAuthValidator.validateDisplayName(displayName)?.let { throw IllegalArgumentException(it) }
@@ -238,34 +214,7 @@ class FirebaseAuthRepository @Inject constructor(
         )
     }
 
-    /**
-     * 현재 비밀번호로 재인증 후 새 비밀번호로 변경합니다.
-     * 시스템관리자(고정 비밀번호) 계정은 변경할 수 없습니다.
-     */
-    suspend fun changePassword(currentPassword: String, newPassword: String, confirmPassword: String) {
-        val user = auth.currentUser ?: throw IllegalStateException("로그인이 필요합니다.")
-        val email = user.email?.let(GmailAuthValidator::normalizeEmail).orEmpty()
-        if (email.isBlank()) throw IllegalStateException("이메일 계정이 필요합니다.")
-        if (PrivilegedAuthConfig.isPrivilegedEmail(email)) {
-            throw IllegalArgumentException("시스템관리자 계정은 고정 비밀번호를 사용하며 변경할 수 없습니다.")
-        }
-        GmailAuthValidator.validatePassword(currentPassword)?.let { throw IllegalArgumentException(it) }
-        GmailAuthValidator.validatePassword(newPassword)?.let { throw IllegalArgumentException(it) }
-        GmailAuthValidator.validatePasswordConfirm(newPassword, confirmPassword)
-            ?.let { throw IllegalArgumentException(it) }
-        if (currentPassword == newPassword) {
-            throw IllegalArgumentException("새 비밀번호는 현재 비밀번호와 달라야 합니다.")
-        }
-        val credential = EmailAuthProvider.getCredential(email, currentPassword)
-        try {
-            user.reauthenticate(credential).await()
-            user.updatePassword(newPassword).await()
-        } catch (error: Throwable) {
-            throw IllegalArgumentException(error.toEmailAuthErrorMessage())
-        }
-    }
-
-    // Legacy Google Sign-In (설정·마이그레이션 호환)
+    // Google Sign-In (웹과 동일 — 앱 로그인 유일한 경로)
     fun createGoogleSignInIntent(): Intent {
         val webClientId = context.getString(R.string.default_web_client_id)
         val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)

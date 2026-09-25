@@ -28,8 +28,8 @@ data class JoinRequestDoc(
     /** 승인 후 회원 장부 등록 여부. 필드가 없거나 false면 아직 미등록. */
     val profileCompleted: Boolean = false
 ) {
-    fun needsMemberProfile(): Boolean =
-        status == JoinRequestStatus.APPROVED && !profileCompleted
+    /** 승인 후 가입정보 입력은 더 이상 요구하지 않음 */
+    fun needsMemberProfile(): Boolean = false
 
     fun toMap(): Map<String, Any?> = mapOf(
         "uid" to uid,
