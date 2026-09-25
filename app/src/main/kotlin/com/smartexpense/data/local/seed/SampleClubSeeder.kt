@@ -1,6 +1,7 @@
 package com.smartexpense.data.local.seed
 
 import com.smartexpense.data.local.ClubConstants
+import com.smartexpense.data.local.entity.club.ClubSettingEntity
 import com.smartexpense.data.local.entity.club.ClubCategory
 import com.smartexpense.data.local.entity.club.ClubTransactionEntity
 import com.smartexpense.data.local.entity.club.ClubTransactionType
@@ -34,13 +35,15 @@ class SampleClubSeeder @Inject constructor(
     private val yearlyDuesDao get() = databaseGateway.yearlyDuesDao()
     private val duesPaymentHistoryDao get() = databaseGateway.duesPaymentHistoryDao()
     private val clubTransactionDao get() = databaseGateway.clubTransactionDao()
+    private val clubSettingsDao get() = databaseGateway.clubSettingsDao()
 
     /** 초기에 샘플에 들어갔던 실명 — 발견 시 임의 이름으로 재시드 */
     private val legacyRealSampleNames = setOf("강대화", "김민석", "김성겸", "김영섭")
 
     /**
      * 샘플 모임의 Room `clubId`를 준비해서 반환합니다.
-     * 이미 있으면 그대로 재사용하고, 비어 있거나 실명이 남아 있으면 샘플 데이터를 (재)채웁니다.
+     * 이미 있으면 그대로 재사용하고, 비어 있거나 실명이 남아 있거나
+     * 샘플 콘텐츠 버전이 낮으면 임의 이름 데이터로 (재)채웁니다.
      */
     suspend fun ensureSampleClubReady(): Long {
         val existing = clubRepository.getAllClubsOnce()
@@ -53,11 +56,24 @@ class SampleClubSeeder @Inject constructor(
             id
         }
         val members = memberDao.getAllOnce(clubId)
+        val storedVersion = clubSettingsDao.getEntry(clubId, SAMPLE_CONTENT_VERSION_KEY)
+            ?.settingValue
+            ?.toIntOrNull()
+            ?: 0
         val needsReseed = members.isEmpty() ||
+            storedVersion < SAMPLE_CONTENT_VERSION ||
             members.any { it.name in legacyRealSampleNames }
         if (needsReseed) {
             clearSampleContent(clubId)
             seedSampleData(clubId)
+            clubSettingsDao.upsert(
+                ClubSettingEntity(
+                    clubId = clubId,
+                    settingKey = SAMPLE_CONTENT_VERSION_KEY,
+                    settingValue = SAMPLE_CONTENT_VERSION.toString(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
         }
         return clubId
     }
@@ -212,5 +228,11 @@ class SampleClubSeeder @Inject constructor(
                 )
             )
         }
+    }
+
+    companion object {
+        /** 샘플 콘텐츠 버전 — 올리면 기존 샘플(실명 포함)을 지우고 다시 채웁니다. */
+        private const val SAMPLE_CONTENT_VERSION = 2
+        private const val SAMPLE_CONTENT_VERSION_KEY = "sample_content_version"
     }
 }
