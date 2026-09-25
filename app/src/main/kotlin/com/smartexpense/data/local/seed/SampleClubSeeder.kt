@@ -20,10 +20,9 @@ import javax.inject.Singleton
  * 승인 전(미승인) 일반 회원에게 보여줄 "체험용 샘플" 모임을 준비합니다.
  *
  * - 웹(`src/lib/sampleData.ts`)의 `SAMPLE_*` 와 동일하게 소량 가짜 데이터(회원 3명·거래 3건·회비 2건)만 담습니다.
+ * - 회원명은 실명과 겹치지 않는 임의 이름(가람·나현·다솔)을 사용합니다.
  * - [ClubConstants.DEFAULT_CLUB_ID]에 있는 한우리 실(seed) 데이터와는 완전히 별개의 Room `clubId`를 사용하므로
  *   로그인은 했지만 아직 모임 멤버가 아닌 사용자가 실데이터/클라우드 데이터를 볼 수 없습니다.
- * - 클럽 이름에 공백을 둔 "한우리 (샘플)"을 사용해 [ClubConstants.isHanuriSeedClub] 판정과
- *   [DatabaseSeeder]의 한우리 시드 재구성 로직에 절대 걸리지 않도록 합니다.
  */
 @Singleton
 class SampleClubSeeder @Inject constructor(
@@ -36,9 +35,12 @@ class SampleClubSeeder @Inject constructor(
     private val duesPaymentHistoryDao get() = databaseGateway.duesPaymentHistoryDao()
     private val clubTransactionDao get() = databaseGateway.clubTransactionDao()
 
+    /** 초기에 샘플에 들어갔던 실명 — 발견 시 임의 이름으로 재시드 */
+    private val legacyRealSampleNames = setOf("강대화", "김민석", "김성겸", "김영섭")
+
     /**
      * 샘플 모임의 Room `clubId`를 준비해서 반환합니다.
-     * 이미 있으면 그대로 재사용하고, 비어 있으면(최초 1회) 소량 샘플 데이터를 채웁니다.
+     * 이미 있으면 그대로 재사용하고, 비어 있거나 실명이 남아 있으면 샘플 데이터를 (재)채웁니다.
      */
     suspend fun ensureSampleClubReady(): Long {
         val existing = clubRepository.getAllClubsOnce()
@@ -50,10 +52,22 @@ class SampleClubSeeder @Inject constructor(
             clubDao.updateSlogan(id, ClubConstants.SAMPLE_CLUB_SLOGAN)
             id
         }
-        if (memberDao.getAllOnce(clubId).isEmpty()) {
+        val members = memberDao.getAllOnce(clubId)
+        val needsReseed = members.isEmpty() ||
+            members.any { it.name in legacyRealSampleNames }
+        if (needsReseed) {
+            clearSampleContent(clubId)
             seedSampleData(clubId)
         }
         return clubId
+    }
+
+    private suspend fun clearSampleContent(clubId: Long) {
+        duesPaymentHistoryDao.deleteAll(clubId)
+        yearlyDuesDao.deleteAllDetails(clubId)
+        yearlyDuesDao.deleteAllYearlyDues(clubId)
+        clubTransactionDao.deleteAll(clubId)
+        memberDao.deleteAllMembers(clubId)
     }
 
     private suspend fun seedSampleData(clubId: Long) {
@@ -61,7 +75,7 @@ class SampleClubSeeder @Inject constructor(
             MemberEntity(
                 clubId = clubId,
                 joinDate = "2011-10-01",
-                name = "강대화",
+                name = "가람",
                 birthDate = "",
                 address = "",
                 residenceRegion = "대전",
@@ -72,7 +86,7 @@ class SampleClubSeeder @Inject constructor(
             MemberEntity(
                 clubId = clubId,
                 joinDate = "2012-03-15",
-                name = "김민석",
+                name = "나현",
                 birthDate = "",
                 address = "",
                 residenceRegion = "서울",
@@ -83,7 +97,7 @@ class SampleClubSeeder @Inject constructor(
             MemberEntity(
                 clubId = clubId,
                 joinDate = "2011-10-01",
-                name = "김성겸",
+                name = "다솔",
                 birthDate = "",
                 address = "",
                 residenceRegion = "경기도 광명",
@@ -104,7 +118,7 @@ class SampleClubSeeder @Inject constructor(
                     category = ClubCategory.REGULAR_DUES,
                     incomeAmount = 300_000,
                     expenseAmount = 0,
-                    note = "김영섭 회비(25년_하반기,26년_상반기)"
+                    note = "가람 회비(25년_하반기,26년_상반기)"
                 ),
                 ClubTransactionEntity(
                     clubId = clubId,
@@ -129,14 +143,14 @@ class SampleClubSeeder @Inject constructor(
 
         seedDues(
             clubId = clubId,
-            memberId = memberIdByName["강대화"],
+            memberId = memberIdByName["가람"],
             year = 2026,
             firstHalfPaid = 0,
             secondHalfPaid = 0
         )
         seedDues(
             clubId = clubId,
-            memberId = memberIdByName["김민석"],
+            memberId = memberIdByName["나현"],
             year = 2026,
             firstHalfPaid = 150_000,
             firstHalfPayDate = "2026-03-01",
