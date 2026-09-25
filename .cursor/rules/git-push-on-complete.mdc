@@ -1,0 +1,28 @@
+---
+description: 작업 완료 시 앱·웹 GitHub 커밋/푸시까지 마무리
+alwaysApply: true
+---
+
+# 앱·웹 push 관리
+
+기능/수정 작업이 **끝나면** 로컬에만 두지 말고, 해당 저장소에 **커밋 + `git push`** 까지 한다.
+
+## 저장소
+
+| 대상 | 경로 | GitHub |
+|------|------|--------|
+| 웹 | `c:\AiDev\SmartExpenseWeb` | `https://github.com/gyoumi9505129-wq/SmartExpenseWeb` |
+| 앱 | `c:\AiDev\SmartExpense` | `https://github.com/gyoumi9505129-wq/SmartExpense` |
+
+## 절차
+
+1. 작업한 쪽에 `git status` / `git diff`로 변경 확인 (시크릿·`.env`·키파일 제외)
+2. 의미 있는 커밋 메시지로 커밋
+3. `git push` (브랜치가 remote를 추적 중이면 `git push`만)
+4. 앱·웹 **둘 다** 손댔으면 **각각** 커밋·푸시
+5. 푸시 후 원격 URL 또는 “푸시 완료”를 짧게 보고
+
+## 예외
+
+- 사용자가 “커밋/푸시 하지 마”, “로컬만”이라고 명시하면 생략
+- 확인이 필요한 대규모/위험 변경은 커밋 전에 한 줄로 확인 후 진행
