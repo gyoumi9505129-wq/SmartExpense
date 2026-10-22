@@ -77,7 +77,7 @@ fun MeetingHubScreen(
         snackbarHostState.showSnackbar(message)
     }
 
-    // 로그인 후 한우리/샘플로 바로 입장
+    // 로그인 후 한우리(또는 미승인 시 샘플)로 바로 입장. 공용 계정은 항상 실데이터.
     LaunchedEffect(uiState.isLoading, uiState.autoEnterCandidate?.meeting?.id) {
         if (uiState.isLoading) return@LaunchedEffect
         val item = uiState.autoEnterCandidate ?: return@LaunchedEffect

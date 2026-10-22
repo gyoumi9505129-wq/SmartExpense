@@ -1,6 +1,5 @@
 package com.smartexpense.data.firebase
 
-import com.smartexpense.data.firebase.PrivilegedAuthConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthSession
 import com.smartexpense.data.firebase.firestore.JoinRequestFirestoreRepository
 import com.smartexpense.data.firebase.firestore.MeetingDoc
@@ -60,6 +59,12 @@ class MemberLoginPolicy @Inject constructor(
         meeting: MeetingDoc
     ): MemberAccessDecision {
         if (isPrivilegedSession(session)) {
+            return MemberAccessDecision.Allowed
+        }
+        // 한우리 공용 계정: 승인 없이 조회 전용 입장
+        if (HanuriSharedViewerConfig.matches(session.uid, session.email) &&
+            HanuriSharedViewerConfig.isHanuriMeetingName(meeting.name)
+        ) {
             return MemberAccessDecision.Allowed
         }
         if (isMeetingManager(meeting, session.uid)) {

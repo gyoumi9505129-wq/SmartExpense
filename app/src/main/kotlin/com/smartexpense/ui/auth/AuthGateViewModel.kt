@@ -12,6 +12,7 @@ import com.smartexpense.data.firebase.InactiveMemberAccessException
 import com.smartexpense.data.firebase.MemberAccessDecision
 import com.smartexpense.data.firebase.MemberLoginPolicy
 import com.smartexpense.data.firebase.MeetingRoleRepository
+import com.smartexpense.data.firebase.HanuriSharedViewerConfig
 import com.smartexpense.data.firebase.PrivilegedAuthConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
 import com.smartexpense.data.firebase.auth.FirebaseAuthSession
@@ -95,9 +96,11 @@ class AuthGateViewModel @Inject constructor(
                         }
                     }
                     cloudLedgerModeRepository.setEnabled(session != null && canAccessCloud)
+                    // 미승인 일반 회원만 샘플. 한우리 공용 계정은 실데이터 조회 대상이라 샘플로 보내지 않음.
                     if (session != null &&
                         !canAccessCloud &&
-                        !PrivilegedAuthConfig.isPrivilegedAccount(session.uid, session.email)
+                        !PrivilegedAuthConfig.isPrivilegedAccount(session.uid, session.email) &&
+                        !HanuriSharedViewerConfig.matches(session.uid, session.email)
                     ) {
                         runCatching {
                             val sampleId = sampleClubSeeder.ensureSampleClubReady()

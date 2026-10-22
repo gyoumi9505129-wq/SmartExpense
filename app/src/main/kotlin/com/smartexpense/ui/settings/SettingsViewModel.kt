@@ -17,6 +17,7 @@ import com.smartexpense.data.export.PdfExportManager
 import com.smartexpense.data.firebase.CloudDataMigrationRepository
 import com.smartexpense.data.firebase.CloudLedgerModeRepository
 import com.smartexpense.data.firebase.CloudSyncMode
+import com.smartexpense.data.firebase.HanuriSharedViewerConfig
 import com.smartexpense.data.firebase.MeetingRoleRepository
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
@@ -211,9 +212,12 @@ class SettingsViewModel @Inject constructor(
             }
             return
         }
+        val sessionEmail = firebaseAuthRepository.currentSession()?.email
+        val sharedViewer = HanuriSharedViewerConfig.matches(uid, sessionEmail)
         val hasAccess = primary.ownerUid == uid ||
             primary.adminUid == uid ||
-            primary.sharedWith.contains(uid)
+            primary.sharedWith.contains(uid) ||
+            sharedViewer
         if (hasAccess) {
             _uiState.update {
                 it.copy(
@@ -231,7 +235,8 @@ class SettingsViewModel @Inject constructor(
         val statusEnum = request?.status
         _uiState.update {
             it.copy(
-                canRequestAccess = statusEnum != JoinRequestStatus.PENDING &&
+                canRequestAccess = !sharedViewer &&
+                    statusEnum != JoinRequestStatus.PENDING &&
                     statusEnum != JoinRequestStatus.APPROVED,
                 accessRequestStatus = statusEnum?.name,
                 accessRequestMeetingId = primary.id,

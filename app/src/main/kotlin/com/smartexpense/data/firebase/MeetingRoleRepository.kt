@@ -170,11 +170,16 @@ class MeetingRoleRepository @Inject constructor(
 
         fun canEdit(): Boolean = canManageMeeting()
 
-        /** 현재 선택 모임의 소속 여부 (개설자·지정 운영관리자·승인된 활동 회원·시스템관리자) */
+        /** 현재 선택 모임의 소속 여부 (개설자·지정 운영관리자·승인된 활동 회원·시스템관리자·한우리 공용) */
         fun isMeetingMember(): Boolean {
             val uid = session?.uid ?: return false
             if (meetingId.isNullOrBlank() || meeting == null) return false
             if (canManageMeeting()) return true
+            if (HanuriSharedViewerConfig.matches(uid, session.email) &&
+                HanuriSharedViewerConfig.isHanuriMeetingName(meeting.name)
+            ) {
+                return true
+            }
             if (meeting.inactiveMemberUids.contains(uid)) return false
             return meeting.sharedWith.contains(uid)
         }

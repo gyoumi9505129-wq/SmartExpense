@@ -7,6 +7,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.smartexpense.data.firebase.FirebaseInitializer
+import com.smartexpense.data.firebase.HanuriSharedViewerConfig
 import com.smartexpense.data.firebase.PrivilegedAuthConfig
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
@@ -628,6 +629,41 @@ class MeetingFirestoreRepository @Inject constructor(
             }
         }
         return claimed
+    }
+
+    /**
+     * 한우리 공용 계정: 승인 없이 한우리 모임의 sharedWith에 본인을 넣어 조회 권한을 확보한다.
+     */
+    suspend fun ensureHanuriSharedViewerAccess(uid: String, email: String?): Int {
+        if (!HanuriSharedViewerConfig.matches(uid, email)) return 0
+        if (uid.isBlank()) return 0
+        authRepository.requireUid()
+        val candidates = (
+            runCatching { getSearchableMeetingsOnce(fromServer = true) }.getOrDefault(emptyList()) +
+                runCatching { getAllMeetingsOnce(fromServer = false) }.getOrDefault(emptyList())
+            )
+            .filter { HanuriSharedViewerConfig.isHanuriMeetingName(it.name) }
+            .distinctBy { it.id }
+        var granted = 0
+        candidates.forEach { meeting ->
+            if (meeting.sharedWith.contains(uid)) {
+                granted += 1
+                return@forEach
+            }
+            runCatching {
+                db.document(FirestorePaths.meeting(meeting.id))
+                    .update(
+                        mapOf(
+                            "sharedWith" to FieldValue.arrayUnion(uid),
+                            "inactiveMemberUids" to FieldValue.arrayRemove(uid),
+                            "inactiveMemberReasons.$uid" to FieldValue.delete()
+                        )
+                    )
+                    .await()
+                granted += 1
+            }
+        }
+        return granted
     }
 
     private suspend fun findUidByEmailInProfiles(email: String): String? {
