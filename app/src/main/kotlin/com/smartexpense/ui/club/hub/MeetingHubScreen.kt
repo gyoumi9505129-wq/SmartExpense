@@ -9,13 +9,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,12 +21,10 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,7 +32,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -46,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smartexpense.domain.security.AppLockUnlockMethod
-import com.smartexpense.ui.club.components.rememberSyncedTextFieldValue
 import com.smartexpense.ui.club.member.MemberRegistrationBottomSheet
 import com.smartexpense.ui.common.RefreshOnScreenVisible
 import com.smartexpense.ui.security.AppLockViewModel
@@ -59,6 +52,10 @@ import com.smartexpense.ui.theme.SurfaceDeepGray
 import com.smartexpense.ui.theme.TextPrimary
 import com.smartexpense.ui.theme.TextSecondary
 
+/**
+ * 로그인 직후 한우리(또는 단일 모임)로 바로 입장하는 게이트 화면.
+ * 검색·만들기·가입 대기 탭은 쓰지 않음. 가입 승인은 모임 안 「관리」 탭에서 처리.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeetingHubScreen(
@@ -80,7 +77,7 @@ fun MeetingHubScreen(
         snackbarHostState.showSnackbar(message)
     }
 
-    // 로그인 후 한우리/샘플로 바로 입장 (웹과 동일 흐름)
+    // 로그인 후 한우리/샘플로 바로 입장
     LaunchedEffect(uiState.isLoading, uiState.autoEnterCandidate?.meeting?.id) {
         if (uiState.isLoading) return@LaunchedEffect
         val item = uiState.autoEnterCandidate ?: return@LaunchedEffect
@@ -129,65 +126,42 @@ fun MeetingHubScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundBlack)
             )
-        },
-        floatingActionButton = { }
-    ) { padding ->
-        val visibleTabs = uiState.visibleTabs
-        val selectedIndex = visibleTabs.indexOf(uiState.selectedTab).coerceAtLeast(0)
-
-        LaunchedEffect(uiState.isElevated, uiState.canReviewJoins, uiState.selectedTab) {
-            if (uiState.selectedTab !in visibleTabs) {
-                viewModel.selectTab(MeetingHubTab.MY)
-            }
         }
-
-        PullToRefreshBox(
-            isRefreshing = uiState.isRefreshing,
-            onRefresh = viewModel::refreshHub,
+    ) { padding ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(padding),
+            contentAlignment = Alignment.Center
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (visibleTabs.size > 1) {
-                    TabRow(
-                        selectedTabIndex = selectedIndex,
-                        containerColor = BackgroundBlack,
-                        contentColor = TextPrimary
-                    ) {
-                        visibleTabs.forEach { tab ->
-                            Tab(
-                                selected = uiState.selectedTab == tab,
-                                onClick = { viewModel.selectTab(tab) },
-                                text = { Text(uiState.tabLabel(tab)) }
-                            )
-                        }
+            when {
+                uiState.isLoading ||
+                    uiState.autoEnterCandidate != null ||
+                    uiState.isAutoEntering ||
+                    uiState.isSubmitting ||
+                    uiState.isElevated -> {
+                    // 시스템관리자는 샘플 안내 대신 입장/로딩만 표시
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = TextPrimary)
+                        Text(
+                            if (uiState.isElevated) "모임으로 이동 중…" else "불러오는 중…",
+                            color = TextSecondary,
+                            modifier = Modifier.padding(top = 16.dp)
+                        )
                     }
                 }
 
-                when {
-                    // 자동 입장 중에는 목록을 그리지 않음 (관리자 허브 깜빡임 방지)
-                    uiState.isLoading ||
-                        uiState.autoEnterCandidate != null ||
-                        uiState.isAutoEntering ||
-                        uiState.isSubmitting -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = TextPrimary)
-                        }
-                    }
-
-                    else -> {
-                        // 모임 목록(대기 화면)은 더 이상 쓰지 않음 — 미승인 시 샘플 안내만
-                        MeetingItemList(
-                            items = emptyList(),
-                            isSubmitting = false,
-                            emptyTitle = "한우리 샘플",
-                            emptyDescription = "승인 전에는 로컬 샘플로 체험할 수 있습니다.\n설정(⚙)에서 「승인 요청」을 보내세요. 승인되면 실데이터를 볼 수 있습니다.",
-                            onEnter = { },
-                            onJoinRequest = { },
-                            onCompleteProfile = { }
-                        )
-                    }
+                else -> {
+                    // 자동 입장할 모임이 없을 때만 안내 (미승인 샘플 등)
+                    MeetingItemList(
+                        items = emptyList(),
+                        isSubmitting = false,
+                        emptyTitle = "한우리 샘플",
+                        emptyDescription = "승인 전에는 로컬 샘플로 체험할 수 있습니다.\n설정(⚙)에서 「승인 요청」을 보내세요. 승인되면 실데이터를 볼 수 있습니다.",
+                        onEnter = { },
+                        onJoinRequest = { },
+                        onCompleteProfile = { }
+                    )
                 }
             }
         }
@@ -261,9 +235,6 @@ private fun MeetingHubDialogs(
         }
     }
 
-    // 가입 승인은 모임 안 「관리」 탭에서 처리 (허브 시트/탭 제거)
-
-    // 로그인 방식 선택 다이얼로그 (선택 시 등록/변경 입력으로 이동)
     if (uiState.settings.showUnlockMethodDialog) {
         AlertDialog(
             onDismissRequest = viewModel::dismissUnlockMethodDialog,
@@ -436,48 +407,4 @@ private fun MeetingHubDialogs(
             onBiometricChanged = viewModel::setBiometricEnabled
         )
     }
-}
-
-@Composable
-private fun MeetingSearchField(
-    query: String,
-    onQueryChange: (String) -> Unit
-) {
-    val focusManager = LocalFocusManager.current
-    val searchTextFieldState = rememberSyncedTextFieldValue(query)
-    OutlinedTextField(
-        value = searchTextFieldState.value,
-        onValueChange = { updated ->
-            searchTextFieldState.value = updated
-            onQueryChange(updated.text)
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        placeholder = { Text("모임 이름·설명 검색", color = TextSecondary) },
-        leadingIcon = {
-            Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary)
-        },
-        trailingIcon = {
-            if (query.isNotBlank()) {
-                IconButton(
-                    onClick = {
-                        searchTextFieldState.value = searchTextFieldState.value.copy(text = "")
-                        onQueryChange("")
-                    }
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = "검색어 지우기", tint = TextSecondary)
-                }
-            }
-        },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = TextPrimary,
-            unfocusedTextColor = TextPrimary,
-            focusedBorderColor = IncomeBlue,
-            unfocusedBorderColor = BorderLine
-        )
-    )
 }

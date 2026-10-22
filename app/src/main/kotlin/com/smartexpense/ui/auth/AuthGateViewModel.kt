@@ -116,6 +116,24 @@ class AuthGateViewModel @Inject constructor(
 
     fun getGoogleSignInIntent(): Intent = firebaseAuthRepository.createGoogleSignInIntent()
 
+    fun startGoogleSignIn(onIntentReady: (Intent) -> Unit) {
+        if (_authUiState.value.isSubmitting) return
+        viewModelScope.launch {
+            _authUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
+            try {
+                val intent = firebaseAuthRepository.prepareGoogleSignInIntent()
+                onIntentReady(intent)
+            } catch (error: Throwable) {
+                _authUiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        errorMessage = error.toEmailAuthErrorMessage()
+                    )
+                }
+            }
+        }
+    }
+
     fun onGoogleSignInCancelled() {
         _authUiState.update {
             it.copy(
@@ -126,7 +144,6 @@ class AuthGateViewModel @Inject constructor(
     }
 
     fun handleGoogleSignInResult(data: Intent?) {
-        if (_authUiState.value.isSubmitting) return
         viewModelScope.launch {
             _authUiState.update { it.copy(isSubmitting = true, errorMessage = null) }
             try {

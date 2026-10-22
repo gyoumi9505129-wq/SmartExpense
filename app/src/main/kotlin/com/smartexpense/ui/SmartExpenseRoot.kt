@@ -140,7 +140,9 @@ fun SmartExpenseRoot(
                         EmailAuthScreen(
                             uiState = authUiState,
                             onGoogleSignIn = {
-                                googleSignInLauncher.launch(authGateViewModel.getGoogleSignInIntent())
+                                authGateViewModel.startGoogleSignIn { intent ->
+                                    googleSignInLauncher.launch(intent)
+                                }
                             },
                             onDismissError = authGateViewModel::dismissError,
                             modifier = Modifier.fillMaxSize()

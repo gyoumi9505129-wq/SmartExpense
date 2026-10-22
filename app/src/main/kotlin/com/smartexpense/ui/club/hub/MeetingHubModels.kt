@@ -122,8 +122,8 @@ data class HubSettingsState(
      */
     val isAutoEntering: Boolean = false
 ) {
+    /** 허브 목록 UI는 쓰지 않음 — 로그인 후 모임으로 바로 입장. 가입 승인은 「관리」 탭. */
     val visibleTabs: List<MeetingHubTab>
-        // 허브에서 검색·가입대기·만들기 탭 제거. 가입 승인은 모임 안 「관리」 탭에서 처리.
         get() = listOf(MeetingHubTab.MY)
 
     val pendingProfileMeetings: List<MeetingHubItem>

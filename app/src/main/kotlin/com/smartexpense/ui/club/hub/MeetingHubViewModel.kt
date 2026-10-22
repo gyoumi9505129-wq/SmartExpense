@@ -108,25 +108,39 @@ class MeetingHubViewModel @Inject constructor(
             ) { directory, joined, requests, session, restricted ->
                 HubSnapshot(directory, joined, requests, session, restricted)
             }.distinctUntilChanged().collect { snapshot ->
+                val uid = snapshot.session?.uid
+                // 로그아웃·계정 전환 시 자동 입장 플래그 초기화 (ViewModel이 Activity에 남아 있어도)
+                if (uid != lastProfileUid) {
+                    didOfferAutoEnter = false
+                    lastJoinRefreshKey = null
+                    lastManagedMeetingKey = null
+                    _uiState.update {
+                        it.copy(autoEnterCandidate = null, isAutoEntering = false)
+                    }
+                }
                 if (snapshot.directory.isNotEmpty()) {
                     allMeetings = mergeSearchDirectory(allMeetings, snapshot.directory)
                 }
                 if (snapshot.session == null) {
                     joinedMeetings = emptyList()
-                } else if (snapshot.joined.isNotEmpty()) {
-                    joinedMeetings = mergeJoinedKeepProfile(snapshot.joined)
-                }
-                restrictedMeetings = snapshot.restricted
-                if (snapshot.session == null) {
+                    restrictedMeetings = emptyList()
                     myJoinRequests = emptyMap()
                     locallyCompletedProfileIds = emptySet()
                     selfEnrolledMeetingIds = emptySet()
-                } else if (snapshot.requests.isNotEmpty()) {
-                    myJoinRequests = mergeJoinRequests(
-                        snapshot.requests
-                            .groupBy({ it.first }, { it.second })
-                            .mapValues { (_, docs) -> pickPreferredJoinRequest(docs) }
-                    )
+                    didOfferAutoEnter = false
+                    lastProfileUid = null
+                } else {
+                    if (snapshot.joined.isNotEmpty()) {
+                        joinedMeetings = mergeJoinedKeepProfile(snapshot.joined)
+                    }
+                    restrictedMeetings = snapshot.restricted
+                    if (snapshot.requests.isNotEmpty()) {
+                        myJoinRequests = mergeJoinRequests(
+                            snapshot.requests
+                                .groupBy({ it.first }, { it.second })
+                                .mapValues { (_, docs) -> pickPreferredJoinRequest(docs) }
+                        )
+                    }
                 }
                 val elevated = isElevatedAccount(snapshot.session?.uid, snapshot.session?.email)
                 val role = UserRole.resolve(
@@ -144,14 +158,19 @@ class MeetingHubViewModel @Inject constructor(
                         )
                     )
                 }
-                val uid = snapshot.session?.uid
-                if (uid != lastProfileUid) {
+                if (uid != null && uid != lastProfileUid) {
                     lastProfileUid = uid
                     loadProfile()
+                    // 재로그인 직후 모임 목록이 비어 있으면 서버에서 다시 받음
+                    if (allMeetings.isEmpty()) {
+                        refreshHub(userInitiated = true)
+                    }
                 }
                 refreshMyMemberStatuses()
                 rebuildLists()
-                _uiState.update { it.copy(isLoading = false) }
+                if (snapshot.session == null) {
+                    _uiState.update { it.copy(isLoading = false) }
+                }
                 val joinRefreshKey = (uid.orEmpty() + "|" + snapshot.joined.map { it.id }.sorted().joinToString())
                 if (snapshot.session != null && joinRefreshKey != lastJoinRefreshKey) {
                     lastJoinRefreshKey = joinRefreshKey
@@ -1267,10 +1286,6 @@ class MeetingHubViewModel @Inject constructor(
             (joinedMeetings + requested + restrictedForMine + rosterRestricted + rosterActive + primaryOnly)
                 .distinctBy { it.id }
         }
-        val query = _uiState.value.searchQuery.trim()
-        val searchable = allMeetings
-            .filter { meeting -> meetingFirestoreRepository.matchesSearch(meeting, query) }
-            .map { meeting -> toHubItem(meeting, uid, elevated, session?.email) }
         val canReviewJoins = elevated ||
             joinedMeetings.any { meeting ->
                 meeting.ownerUid == uid || meeting.adminUid == uid
@@ -1288,7 +1303,7 @@ class MeetingHubViewModel @Inject constructor(
             val primary = myItems.filter { isPrimaryMeetingName(it.meeting.name) }
             if (primary.isNotEmpty()) primary else myItems.take(1)
         }
-        // 일반·시스템관리자 모두 한우리(또는 단일 모임)로 바로 입장 — 허브 목록을 거치지 않음
+        // 로그인 후 한우리(또는 단일 모임)로 바로 입장 — 허브 목록은 잠깐만 씀
         val preferred = displayMine.firstOrNull {
             isPrimaryMeetingName(it.meeting.name)
         } ?: displayMine.firstOrNull()
@@ -1316,7 +1331,8 @@ class MeetingHubViewModel @Inject constructor(
             )
         _uiState.update {
             it.copy(
-                isLoading = waitingForMeetings && !keepEntering,
+                isLoading = (waitingForMeetings && !keepEntering) ||
+                    (preferred == null && elevated && session != null),
                 isElevated = elevated,
                 userRole = role,
                 canReviewJoins = canReviewJoins,

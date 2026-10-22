@@ -215,26 +215,58 @@ class FirebaseAuthRepository @Inject constructor(
     }
 
     // Google Sign-In (웹과 동일 — 앱 로그인 유일한 경로)
-    fun createGoogleSignInIntent(): Intent {
-        val webClientId = context.getString(R.string.default_web_client_id)
+    private fun googleSignInOptions(): GoogleSignInOptions {
+        val webClientId = context.getString(R.string.default_web_client_id).trim()
         val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-        if (webClientId.isNotBlank() && !webClientId.contains("PLACEHOLDER", ignoreCase = true)) {
-            optionsBuilder.requestIdToken(webClientId)
+            .requestProfile()
+        if (webClientId.isBlank() || webClientId.contains("PLACEHOLDER", ignoreCase = true)) {
+            throw IllegalStateException(
+                "Google 로그인 설정(default_web_client_id)이 없습니다. google-services.json을 확인해 주세요."
+            )
         }
-        val client = GoogleSignIn.getClient(context, optionsBuilder.build())
-        return client.signInIntent
+        optionsBuilder.requestIdToken(webClientId)
+        return optionsBuilder.build()
+    }
+
+    private fun googleSignInClient() = GoogleSignIn.getClient(context, googleSignInOptions())
+
+    fun createGoogleSignInIntent(): Intent = googleSignInClient().signInIntent
+
+    /** 이전 Google 세션을 지운 뒤 계정 선택 화면을 다시 띄운다. */
+    suspend fun prepareGoogleSignInIntent(): Intent {
+        runCatching { googleSignInClient().signOut().await() }
+        return createGoogleSignInIntent()
     }
 
     suspend fun signInWithGoogleIntentData(data: Intent?): FirebaseAuthSession {
-        val account = GoogleSignIn.getSignedInAccountFromIntent(data)
-            .getResult(ApiException::class.java)
+        if (data == null) {
+            throw IllegalStateException("Google 로그인 결과를 받지 못했습니다. 다시 시도해 주세요.")
+        }
+        val account = try {
+            GoogleSignIn.getSignedInAccountFromIntent(data)
+                .getResult(ApiException::class.java)
+        } catch (error: ApiException) {
+            throw IllegalStateException(error.toGoogleSignInUserMessage(), error)
+        }
         val idToken = account.idToken
             ?: throw IllegalStateException(
-                "Google ID 토큰을 받지 못했습니다. Firebase 웹 클라이언트 ID를 확인해 주세요."
+                "Google ID 토큰을 받지 못했습니다.\n" +
+                    "Firebase Console → 프로젝트 설정 → Android 앱 SHA-1이 등록됐는지, " +
+                    "google-services.json이 최신인지 확인해 주세요."
             )
         val credential = GoogleAuthProvider.getCredential(idToken, null)
-        val result = auth.signInWithCredential(credential).await()
+        val result = try {
+            auth.signInWithCredential(credential).await()
+        } catch (error: Throwable) {
+            throw IllegalStateException(
+                error.toEmailAuthErrorMessage().takeIf {
+                    it != "로그인에 실패했습니다."
+                } ?: ("Firebase Google 로그인에 실패했습니다.\n" +
+                    "Authentication → Sign-in method에서 Google 사용 설정이 켜져 있는지 확인해 주세요."),
+                error
+            )
+        }
         val user = result.user
             ?: throw IllegalStateException("Firebase 로그인에 실패했습니다.")
         // Google 계정 표시명이 Auth에 아직 반영되지 않은 경우 우선 적용
@@ -333,6 +365,12 @@ class FirebaseAuthRepository @Inject constructor(
 }
 
 fun Throwable.toEmailAuthErrorMessage(): String {
+    if (this is ApiException) {
+        return toGoogleSignInUserMessage()
+    }
+    cause?.let { nested ->
+        if (nested is ApiException) return nested.toGoogleSignInUserMessage()
+    }
     if (isUserDisabledAuthError()) {
         return "이 계정은 사용할 수 없습니다. 활동중인 회원만 로그인할 수 있습니다."
     }
@@ -356,11 +394,30 @@ fun Throwable.toEmailAuthErrorMessage(): String {
             message.contains("too-many-requests", ignoreCase = true) ||
                 message.contains("TOO_MANY_ATTEMPTS", ignoreCase = true) ->
                 "비밀번호 오류가 너무 많습니다. 잠시 후 다시 시도해 주세요."
-            message.contains("network", ignoreCase = true) ->
+            message.contains("network", ignoreCase = true) ||
+                message.contains("NETWORK_ERROR", ignoreCase = true) ->
                 "네트워크 오류입니다. 인터넷 연결 후 다시 시도해 주세요."
+            message.isNotBlank() -> message
             else -> "로그인에 실패했습니다."
         }
     }
+}
+
+/** Google Sign-In CommonStatusCodes / SignInStatusCodes */
+fun ApiException.toGoogleSignInUserMessage(): String = when (statusCode) {
+    10 -> // DEVELOPER_ERROR
+        "Google 로그인 설정 오류입니다.\n" +
+            "이 앱 서명(SHA-1)이 Firebase에 등록돼 있는지, google-services.json이 최신인지 확인해 주세요."
+    7 -> // NETWORK_ERROR
+        "네트워크 오류입니다. 인터넷 연결 후 다시 시도해 주세요."
+    12500 -> // SIGN_IN_FAILED
+        "Google 로그인에 실패했습니다. Google Play 서비스 업데이트 후 다시 시도해 주세요."
+    12501 -> // SIGN_IN_CANCELLED
+        "Google 계정 선택이 취소되었습니다."
+    12502 -> // SIGN_IN_CURRENTLY_IN_PROGRESS
+        "Google 로그인이 이미 진행 중입니다. 잠시 후 다시 시도해 주세요."
+    else ->
+        "Google 로그인에 실패했습니다. (코드 $statusCode)"
 }
 
 private fun isMissingUserOrBadCredential(text: String): Boolean {
