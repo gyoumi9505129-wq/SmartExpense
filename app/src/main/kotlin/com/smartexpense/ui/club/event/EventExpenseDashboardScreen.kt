@@ -6,6 +6,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,6 +23,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +47,8 @@ import com.smartexpense.ui.club.components.ClubEmptyState
 import com.smartexpense.ui.common.RefreshOnScreenVisible
 import com.smartexpense.ui.club.components.ClubMainTopAppBar
 import com.smartexpense.ui.club.ClubNameViewModel
+import com.smartexpense.ui.club.member.MemberStatusFilter
+import com.smartexpense.ui.club.member.toChipLabel
 import com.smartexpense.ui.club.member.toDisplayLabel
 import com.smartexpense.ui.theme.AmountDisplayStyle
 import com.smartexpense.ui.theme.BackgroundBlack
@@ -97,45 +103,64 @@ fun EventExpenseDashboardScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 16.dp),
+                    .padding(innerPadding),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item(key = "total_header") {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = SurfaceDeepGray)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = SurfaceDeepGray)
                         ) {
-                            Text(
-                                text = "$clubName 총 경조사비 지출액",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "${currencyFormat.format(uiState.totalClubExpense)}원",
-                                style = AmountDisplayStyle.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = ExpenseRed
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "$clubName 총 경조사비 지출액",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
                                 )
-                            )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "${currencyFormat.format(uiState.totalClubExpense)}원",
+                                    style = AmountDisplayStyle.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = ExpenseRed
+                                    )
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "회원별 지급 누적액",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "회원별 지급 누적액",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = TextSecondary,
-                        modifier = Modifier.padding(vertical = 4.dp)
+                }
+
+                item(key = "status_filters") {
+                    EventStatusFilterRow(
+                        uiState = uiState,
+                        onSelect = viewModel::selectStatusFilter
                     )
+                }
+
+                if (uiState.memberSummaries.isEmpty()) {
+                    item(key = "filter_empty") {
+                        Text(
+                            text = "해당 상태의 경조 내역이 없습니다.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp)
+                        )
+                    }
                 }
 
                 items(
@@ -148,6 +173,7 @@ fun EventExpenseDashboardScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
                             .clickable {
                                 expandedMemberKey = if (isExpanded) null else cardKey
                             },
@@ -252,6 +278,44 @@ fun EventExpenseDashboardScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun EventStatusFilterRow(
+    uiState: EventExpenseUiState,
+    onSelect: (MemberStatusFilter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val chips = listOf(
+        MemberStatusFilter.ALL to uiState.memberCount,
+        MemberStatusFilter.ACTIVE to uiState.activeCount,
+        MemberStatusFilter.DORMANT to uiState.dormantCount,
+        MemberStatusFilter.WITHDRAWN to uiState.withdrawnCount
+    )
+    LazyRow(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(chips, key = { it.first.name }) { (filter, count) ->
+            FilterChip(
+                selected = uiState.statusFilter == filter,
+                onClick = { onSelect(filter) },
+                label = {
+                    Text(
+                        text = filter.toChipLabel(count),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = SurfaceDeepGray,
+                    selectedLabelColor = TextPrimary,
+                    containerColor = SurfaceElevated,
+                    labelColor = TextSecondary
+                )
+            )
         }
     }
 }
