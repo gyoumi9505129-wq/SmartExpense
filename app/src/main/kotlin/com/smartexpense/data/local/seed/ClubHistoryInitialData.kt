@@ -28,6 +28,7 @@ object ClubHistoryInitialData {
         ClubHistorySeedRecord("2009-10-01", "회원추가 영입", "신태섭, 김성겸, 김민석"),
         ClubHistorySeedRecord("2011-01-01", "6대 회장 선출", "회장 : 이세희"),
         ClubHistorySeedRecord("2013-11-09", "7대 회장 선출", "회장 : 김성환"),
+        ClubHistorySeedRecord("2014-01-19", "회원 사망", "이세희(사망)"),
         ClubHistorySeedRecord("2015-01-17", "8대 회장 선출", "회장 : 유병학"),
         ClubHistorySeedRecord("2016-10-08", "9대 회장 선출", "회장 : 이충렬"),
         ClubHistorySeedRecord("2016-10-08", "회원추가 영입", "전상환"),
@@ -56,18 +57,7 @@ object ClubHistoryInitialData {
             details = "유병학(사망)",
             note = "2026-01-01 사망 함."
         ),
-        ClubHistorySeedRecord(
-            date = "2026-06-27",
-            content = "12대 회장 선출",
-            details = "회장 : 김영섭",
-            note = "2026년 상반기모임에서 선출"
-        ),
-        ClubHistorySeedRecord(
-            date = "2026-06-27",
-            content = "총무 선출",
-            details = "총무 : 김성겸",
-            note = "2026년 상반기모임에서 선출"
-        )
+        ClubHistorySeedRecord("2026-06-27", "12대 회장 및 총무 선출", "회장 : 김영섭, 총무 : 김성겸"),
     )
 
     fun toEntities(clubId: Long): List<ClubHistoryEntity> = records.map { record ->
