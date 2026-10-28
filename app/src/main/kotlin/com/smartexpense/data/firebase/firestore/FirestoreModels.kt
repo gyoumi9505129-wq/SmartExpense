@@ -102,6 +102,11 @@ data class MeetingDoc(
     val initialBalance: Long? = null,
     /** 강제 재계산으로 유지하는 현재 잔액. */
     val currentBalance: Long? = null,
+    /**
+     * 연도별 BS 이월 잔액. key = "2025", value = openingBalance/closingBalance.
+     * 웹과 동일 스키마.
+     */
+    val yearBalances: Map<String, Map<String, Long>> = emptyMap(),
     /** 신규 회비 등록 기본 납부 방식. 비어 있으면 앱 기본값(반기별). */
     val duesPaymentMethod: String = "",
     /**
@@ -120,6 +125,7 @@ data class MeetingDoc(
         put("sharedWith", sharedWith)
         put("initialBalance", initialBalance)
         put("currentBalance", currentBalance)
+        if (yearBalances.isNotEmpty()) put("yearBalances", yearBalances)
         if (duesPaymentMethod.isNotBlank()) put("duesPaymentMethod", duesPaymentMethod)
         if (invitedEmails.isNotEmpty()) put("invitedEmails", invitedEmails.map { it.lowercase() })
     }
@@ -146,6 +152,7 @@ data class MeetingDoc(
             val invited = (snapshot.get("invitedEmails") as? List<*>)
                 ?.mapNotNull { (it as? String)?.trim()?.lowercase()?.takeIf { email -> email.isNotBlank() } }
                 .orEmpty()
+            val yearBalances = parseYearBalances(snapshot.get("yearBalances"))
             return MeetingDoc(
                 id = snapshot.id,
                 name = snapshot.getString("name").orEmpty(),
@@ -159,9 +166,27 @@ data class MeetingDoc(
                 inactiveMemberReasons = reasons,
                 initialBalance = snapshot.getLong("initialBalance"),
                 currentBalance = snapshot.getLong("currentBalance"),
+                yearBalances = yearBalances,
                 duesPaymentMethod = snapshot.getString("duesPaymentMethod").orEmpty(),
                 invitedEmails = invited
             )
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        private fun parseYearBalances(raw: Any?): Map<String, Map<String, Long>> {
+            val root = raw as? Map<*, *> ?: return emptyMap()
+            val out = linkedMapOf<String, Map<String, Long>>()
+            for ((key, value) in root) {
+                val yearKey = key as? String ?: continue
+                val row = value as? Map<*, *> ?: continue
+                val opening = (row["openingBalance"] as? Number)?.toLong() ?: continue
+                val closing = (row["closingBalance"] as? Number)?.toLong() ?: continue
+                out[yearKey] = mapOf(
+                    "openingBalance" to opening,
+                    "closingBalance" to closing
+                )
+            }
+            return out
         }
     }
 }

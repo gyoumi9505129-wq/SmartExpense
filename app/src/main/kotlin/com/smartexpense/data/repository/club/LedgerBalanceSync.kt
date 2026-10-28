@@ -9,6 +9,8 @@ import com.smartexpense.data.local.entity.club.ClubTransactionEntity
 import com.smartexpense.data.local.entity.club.EntityTimestamps
 import com.smartexpense.di.ClubDatabaseGateway
 import com.smartexpense.domain.ledger.FreshLedgerBalance
+import com.smartexpense.domain.ledger.YearLedgerBalances
+import java.util.Calendar
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
@@ -77,7 +79,10 @@ class LedgerBalanceSync @Inject constructor(
 
         val initial = readInitialBalanceOnly(clubId)
         val (all, income, expense) = resolveAllPeriodSums(clubId, meetingId)
-        val fresh = FreshLedgerBalance.calculate(initial, income, expense)
+        val toYear = Calendar.getInstance().get(Calendar.YEAR)
+        val (yearBalances, freshFromYears) = YearLedgerBalances.build(all, initial, toYear)
+        // 전 기간 합산과 연도 이월 결과가 다르면 연도 이월을 SSOT로 채택
+        val fresh = freshFromYears
 
         // 1) 로컬 설정 덮어쓰기
         clubSettingsDao.upsert(
@@ -99,14 +104,15 @@ class LedgerBalanceSync @Inject constructor(
             }
         }
 
-        // 3) Firestore meetings/{id}.currentBalance 강제 덮어쓰기
+        // 3) Firestore meetings/{id}.currentBalance + yearBalances
         var firestoreUpdated = false
         if (meetingId != null) {
             runCatching {
                 meetingFirestoreRepository.updateBalanceFields(
                     meetingId = meetingId,
                     currentBalance = fresh,
-                    initialBalance = initial
+                    initialBalance = initial,
+                    yearBalances = YearLedgerBalances.toFirestoreMap(yearBalances)
                 )
                 firestoreUpdated = true
             }.onFailure {

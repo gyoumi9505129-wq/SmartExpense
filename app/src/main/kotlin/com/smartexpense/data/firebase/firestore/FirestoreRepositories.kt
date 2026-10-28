@@ -398,20 +398,22 @@ class MeetingFirestoreRepository @Inject constructor(
     }
 
     /**
-     * meetings/{meetingId} 문서의 currentBalance·initialBalance를 강제로 덮어씁니다.
+     * meetings/{meetingId} 문서의 currentBalance·initialBalance·yearBalances를 덮어씁니다.
      */
     suspend fun updateBalanceFields(
         meetingId: String,
         currentBalance: Long,
-        initialBalance: Long
+        initialBalance: Long,
+        yearBalances: Map<String, Any> = emptyMap()
     ) {
         authRepository.requireUid()
         db.document(FirestorePaths.meeting(meetingId))
             .set(
-                mapOf(
-                    "currentBalance" to currentBalance,
-                    "initialBalance" to initialBalance
-                ),
+                buildMap {
+                    put("currentBalance", currentBalance)
+                    put("initialBalance", initialBalance)
+                    put("yearBalances", yearBalances)
+                },
                 SetOptions.merge()
             )
             .await()
