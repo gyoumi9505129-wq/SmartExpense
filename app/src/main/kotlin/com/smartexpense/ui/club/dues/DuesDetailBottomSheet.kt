@@ -77,7 +77,7 @@ fun DuesDetailBottomSheet(
                 text = if (isEditable) {
                     "항목을 눌러 분할 납부 이력을 추가·수정한 뒤 저장해 주세요."
                 } else {
-                    "완납·부분 납부를 눌러 납부 이력을 조회할 수 있습니다. (수정은 모임관리자·시스템관리자만 가능)"
+                    "완납·부분 납부를 눌러 납부 이력을 조회할 수 있습니다. (수정은 모임관리자·한우리 관리자만 가능)"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,

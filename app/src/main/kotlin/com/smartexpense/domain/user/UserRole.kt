@@ -11,7 +11,7 @@ enum class UserRole(
     val emoji: String,
     val label: String
 ) {
-    SYSTEM_ADMIN(emoji = "👑", label = "시스템관리자"),
+    SYSTEM_ADMIN(emoji = "👑", label = "한우리 관리자"),
     CLUB_ADMIN(emoji = "⚡", label = "모임관리자"),
     MEMBER(emoji = "👤", label = "일반회원");
 

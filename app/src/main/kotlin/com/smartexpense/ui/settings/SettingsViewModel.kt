@@ -17,7 +17,6 @@ import com.smartexpense.data.export.PdfExportManager
 import com.smartexpense.data.firebase.CloudDataMigrationRepository
 import com.smartexpense.data.firebase.CloudLedgerModeRepository
 import com.smartexpense.data.firebase.CloudSyncMode
-import com.smartexpense.data.firebase.HanuriSharedViewerConfig
 import com.smartexpense.data.firebase.MeetingRoleRepository
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
@@ -213,11 +212,11 @@ class SettingsViewModel @Inject constructor(
             return
         }
         val sessionEmail = firebaseAuthRepository.currentSession()?.email
-        val sharedViewer = HanuriSharedViewerConfig.matches(uid, sessionEmail)
-        val hasAccess = primary.ownerUid == uid ||
+        val isAdmin = SystemAdminConfig.matches(uid, sessionEmail)
+        val hasAccess = isAdmin ||
+            primary.ownerUid == uid ||
             primary.adminUid == uid ||
-            primary.sharedWith.contains(uid) ||
-            sharedViewer
+            primary.sharedWith.contains(uid)
         if (hasAccess) {
             _uiState.update {
                 it.copy(
@@ -235,8 +234,7 @@ class SettingsViewModel @Inject constructor(
         val statusEnum = request?.status
         _uiState.update {
             it.copy(
-                canRequestAccess = !sharedViewer &&
-                    statusEnum != JoinRequestStatus.PENDING &&
+                canRequestAccess = statusEnum != JoinRequestStatus.PENDING &&
                     statusEnum != JoinRequestStatus.APPROVED,
                 accessRequestStatus = statusEnum?.name,
                 accessRequestMeetingId = primary.id,
@@ -2131,7 +2129,7 @@ class SettingsViewModel @Inject constructor(
             onGranted()
             return
         }
-        _uiState.update { it.copy(snackbarMessage = "시스템관리자만 사용할 수 있습니다.") }
+        _uiState.update { it.copy(snackbarMessage = "한우리 관리자만 사용할 수 있습니다.") }
     }
 
     /** 클라우드 올리기/내리기는 모임관리자(개설자)·지정 총무·시스템관리자. */

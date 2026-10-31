@@ -26,7 +26,7 @@ object PrivilegedAuthConfig {
     }
 
     /**
-     * 한 글자 오타(예: gyoumi950512 → gyoumi9505129)를 시스템관리자 이메일로 맞춘다.
+     * 한 글자 오타를 한우리 관리자 이메일로 맞춘다.
      * 관리자 고정 비밀번호로 로그인할 때만 사용한다.
      */
     fun resolvePrivilegedLoginEmail(typedEmail: String): String? {

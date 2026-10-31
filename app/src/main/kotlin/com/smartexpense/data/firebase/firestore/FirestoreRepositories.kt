@@ -7,7 +7,6 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.smartexpense.data.firebase.FirebaseInitializer
-import com.smartexpense.data.firebase.HanuriSharedViewerConfig
 import com.smartexpense.data.firebase.PrivilegedAuthConfig
 import com.smartexpense.data.firebase.SystemAdminConfig
 import com.smartexpense.data.firebase.auth.FirebaseAuthRepository
@@ -634,38 +633,51 @@ class MeetingFirestoreRepository @Inject constructor(
     }
 
     /**
-     * 한우리 공용 계정: 승인 없이 한우리 모임의 sharedWith에 본인을 넣어 조회 권한을 확보한다.
+     * 한우리 관리자(시스템관리자): 한우리 모임의 ownerUid 를 본인으로 맞춘다.
+     * 조회 전용 공용 계정 개념은 폐기됨.
      */
-    suspend fun ensureHanuriSharedViewerAccess(uid: String, email: String?): Int {
-        if (!HanuriSharedViewerConfig.matches(uid, email)) return 0
+    suspend fun ensureHanuriAdminOwnership(uid: String, email: String?): Int {
+        if (!SystemAdminConfig.matches(uid, email)) return 0
         if (uid.isBlank()) return 0
         authRepository.requireUid()
         val candidates = (
             runCatching { getSearchableMeetingsOnce(fromServer = true) }.getOrDefault(emptyList()) +
                 runCatching { getAllMeetingsOnce(fromServer = false) }.getOrDefault(emptyList())
             )
-            .filter { HanuriSharedViewerConfig.isHanuriMeetingName(it.name) }
+            .filter { ClubConstants.isHanuriSeedClub(it.name) }
             .distinctBy { it.id }
-        var granted = 0
+        var updated = 0
         candidates.forEach { meeting ->
-            if (meeting.sharedWith.contains(uid)) {
-                granted += 1
+            if (meeting.ownerUid == uid) {
+                updated += 1
                 return@forEach
             }
             runCatching {
+                val patch = mutableMapOf<String, Any>(
+                    "ownerUid" to uid,
+                    "sharedWith" to FieldValue.arrayUnion(uid),
+                    "inactiveMemberUids" to FieldValue.arrayRemove(uid),
+                    "inactiveMemberReasons.$uid" to FieldValue.delete()
+                )
                 db.document(FirestorePaths.meeting(meeting.id))
-                    .update(
-                        mapOf(
-                            "sharedWith" to FieldValue.arrayUnion(uid),
-                            "inactiveMemberUids" to FieldValue.arrayRemove(uid),
-                            "inactiveMemberReasons.$uid" to FieldValue.delete()
-                        )
-                    )
+                    .update(patch)
                     .await()
-                granted += 1
+                runCatching {
+                    db.document(FirestorePaths.meetingDirectoryEntry(meeting.id))
+                        .set(
+                            mapOf(
+                                "ownerUid" to uid,
+                                "name" to meeting.name,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            ),
+                            SetOptions.merge()
+                        )
+                        .await()
+                }
+                updated += 1
             }
         }
-        return granted
+        return updated
     }
 
     private suspend fun findUidByEmailInProfiles(email: String): String? {

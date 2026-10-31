@@ -2,7 +2,7 @@ package com.smartexpense.ui.club.hub
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.smartexpense.data.firebase.HanuriSharedViewerConfig
+import com.smartexpense.data.local.ClubConstants
 import com.smartexpense.data.firebase.MemberAccessDecision
 import com.smartexpense.data.firebase.MemberLoginPolicy
 import com.smartexpense.data.firebase.PrivilegedAuthConfig
@@ -162,10 +162,10 @@ class MeetingHubViewModel @Inject constructor(
                 if (uid != null && uid != lastProfileUid) {
                     lastProfileUid = uid
                     loadProfile()
-                    if (HanuriSharedViewerConfig.matches(uid, snapshot.session?.email)) {
+                    if (PrivilegedAuthConfig.isPrivilegedAccount(uid, snapshot.session?.email)) {
                         viewModelScope.launch {
                             runCatching {
-                                meetingFirestoreRepository.ensureHanuriSharedViewerAccess(
+                                meetingFirestoreRepository.ensureHanuriAdminOwnership(
                                     uid,
                                     snapshot.session?.email
                                 )
@@ -287,7 +287,7 @@ class MeetingHubViewModel @Inject constructor(
                     meetingFirestoreRepository.claimPendingEmailInvites(uid, session.email)
                 }
                 runCatching {
-                    meetingFirestoreRepository.ensureHanuriSharedViewerAccess(uid, session.email)
+                    meetingFirestoreRepository.ensureHanuriAdminOwnership(uid, session.email)
                 }
                 val meetingIds = (
                     allMeetings.map { it.id } +
@@ -376,7 +376,7 @@ class MeetingHubViewModel @Inject constructor(
     }
 
     private fun isPrimaryMeetingName(name: String): Boolean =
-        HanuriSharedViewerConfig.isHanuriMeetingName(name)
+        ClubConstants.isHanuriSeedClub(name)
 
     private fun resolvePrimaryMeetingDoc(): MeetingDoc? {
         return allMeetings.firstOrNull { isPrimaryMeetingName(it.name) }
@@ -389,10 +389,9 @@ class MeetingHubViewModel @Inject constructor(
         val uid = session?.uid
         val primary = resolvePrimaryMeetingDoc()
         val request = primary?.id?.let { myJoinRequests[it] }
-        val sharedViewer = HanuriSharedViewerConfig.matches(uid, session?.email)
+        val elevated = isElevatedAccount(uid, session?.email)
         val hasAccess = primary != null && uid != null && (
-            isElevatedAccount(uid, session?.email) ||
-                sharedViewer ||
+            elevated ||
                 primary.ownerUid == uid ||
                 primary.adminUid == uid ||
                 primary.sharedWith.contains(uid) ||
@@ -409,11 +408,9 @@ class MeetingHubViewModel @Inject constructor(
                 primaryMeetingId = primary?.id,
                 primaryMeetingName = primary?.name?.ifBlank { "한우리" } ?: "한우리",
                 accessRequestStatus = status,
-                // 공용 계정은 승인 요청 UI 숨김
                 canRequestAccess = !hasAccess &&
                     primary != null &&
-                    !isElevatedAccount(uid, session?.email) &&
-                    !sharedViewer &&
+                    !elevated &&
                     status != "PENDING"
             )
         }
@@ -987,7 +984,7 @@ class MeetingHubViewModel @Inject constructor(
             val session = authRepository.currentSession()
             if (session != null) {
                 runCatching {
-                    meetingFirestoreRepository.ensureHanuriSharedViewerAccess(
+                    meetingFirestoreRepository.ensureHanuriAdminOwnership(
                         session.uid,
                         session.email
                     )
@@ -1383,15 +1380,11 @@ class MeetingHubViewModel @Inject constructor(
         val joinedIds = joinedMeetings.map { it.id }.toSet()
         val awaitingProfile = isAwaitingMemberProfile(resolved, uid, request)
         val restriction = if (awaitingProfile) null else restrictionFor(resolved, uid)
-        val sharedViewerOnHanuri = HanuriSharedViewerConfig.matches(uid, email) &&
-            HanuriSharedViewerConfig.isHanuriMeetingName(resolved.name)
         val accessStatus = when {
             elevated -> MeetingAccessStatus.ELEVATED
             resolved.ownerUid == uid -> MeetingAccessStatus.OWNER
             uid != null && resolved.adminUid.isNotBlank() && resolved.adminUid == uid ->
                 MeetingAccessStatus.TREASURER
-            // 한우리 공용 계정: 승인 없이 일반회원(조회)로 실데이터 입장
-            sharedViewerOnHanuri -> MeetingAccessStatus.JOINED
             // 클라우드 소속(sharedWith)만 실데이터 입장. 로컬 시드 명단 매칭으로 JOINED 처리하지 않음.
             uid != null && resolved.sharedWith.contains(uid) -> MeetingAccessStatus.JOINED
             restriction != null -> restriction

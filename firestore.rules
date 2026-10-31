@@ -6,31 +6,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    /** 앱 SystemAdminConfig.emails 와 동일하게 유지 */
+    /** 앱 SystemAdminConfig.emails 와 동일 — 한우리 관리자 */
     function isSystemAdmin() {
-      return isSignedIn()
-        && request.auth.token.email is string
-        && request.auth.token.email.lower() in [
-          'gyoumi9505129@gmail.com'
-        ];
-    }
-
-    /** 앱 HanuriSharedViewerConfig.emails 와 동일 — 한우리 조회 전용 공용 계정 */
-    function isHanuriSharedViewer() {
       return isSignedIn()
         && request.auth.token.email is string
         && request.auth.token.email.lower() in [
           'hanuri20011001@gmail.com'
         ];
-    }
-
-    function isHanuriMeetingData(data) {
-      return data != null
-        && data.name is string
-        && (
-          data.name == '한우리'
-          || data.name.matches('한우리\\(.*')
-        );
     }
 
     function meetingData(meetingId) {
@@ -78,15 +60,6 @@ service cloud.firestore {
           .hasOnly(['sharedWith', 'invitedEmails', 'inactiveMemberUids', 'inactiveMemberReasons']);
     }
 
-    /** 한우리 공용 계정이 승인 없이 sharedWith에 본인을 넣는 경우 */
-    function isClaimingHanuriSharedViewerAccess() {
-      return isHanuriSharedViewer()
-        && isHanuriMeetingData(resource.data)
-        && 'sharedWith' in request.resource.data
-        && request.auth.uid in request.resource.data.sharedWith
-        && meetingSelfServiceKeys();
-    }
-
     /** 이미 제한된 계정이 본인 사유를 탈퇴(WITHDRAWN)로 맞출 때 */
     function isMarkingOwnWithdrawn() {
       return isSignedIn()
@@ -128,8 +101,7 @@ service cloud.firestore {
       return isSystemAdmin()
         || isMeetingOwner(meetingId)
         || isMeetingTreasurer(meetingId)
-        || isInSharedWith(data)
-        || (isHanuriSharedViewer() && isHanuriMeetingData(data));
+        || isInSharedWith(data);
     }
 
     /** 휴면·탈퇴로 sharedWith에서 빠져도 본인 명단(상태)은 조회할 수 있다. */
@@ -189,8 +161,7 @@ service cloud.firestore {
       allow update: if isMeetingManager(meetingId)
         || isLeavingMeetingSelf()
         || isMarkingOwnWithdrawn()
-        || isClaimingEmailInvite()
-        || isClaimingHanuriSharedViewerAccess();
+        || isClaimingEmailInvite();
       allow delete: if isMeetingOwner(meetingId) || isSystemAdmin();
 
       match /joinRequests/{requestId} {

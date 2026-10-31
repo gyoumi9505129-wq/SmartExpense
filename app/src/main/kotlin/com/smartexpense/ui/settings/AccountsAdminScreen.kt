@@ -102,7 +102,7 @@ fun AccountsAdminScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "시스템관리자만 접근할 수 있습니다.",
+                    text = "한우리 관리자만 접근할 수 있습니다.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )

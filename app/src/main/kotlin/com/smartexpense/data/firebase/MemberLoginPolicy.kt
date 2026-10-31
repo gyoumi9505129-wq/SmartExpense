@@ -61,12 +61,6 @@ class MemberLoginPolicy @Inject constructor(
         if (isPrivilegedSession(session)) {
             return MemberAccessDecision.Allowed
         }
-        // 한우리 공용 계정: 승인 없이 조회 전용 입장
-        if (HanuriSharedViewerConfig.matches(session.uid, session.email) &&
-            HanuriSharedViewerConfig.isHanuriMeetingName(meeting.name)
-        ) {
-            return MemberAccessDecision.Allowed
-        }
         if (isMeetingManager(meeting, session.uid)) {
             return MemberAccessDecision.Allowed
         }
